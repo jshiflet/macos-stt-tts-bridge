@@ -1,14 +1,14 @@
 
-# STTBridge – MVP (macOS, Swift, Apple-only) – **Komplettanleitung + Quellcode**
+# STTBridge – MVP (macOS, Swift, Apple-only) – **Complete Guide + Source Code**
 
-**Ziel:** Minimal lauffähige macOS-App (.app-Bundle) als **lokale Speech‑Bridge** mit
+**Goal:** A minimal working macOS app (.app bundle) as a **local speech bridge** with
 - HTTP (SwiftNIO): `GET /healthz`, `GET /languages`, `GET /voices`, `POST /stt`, `POST /tts`
 - WebSocket: `WS /stt/stream` (PCM16‑Chunks → Partials/Finals)
-- **Nur Apple‑Frameworks**: `Speech`, `AVFoundation`
+- **Apple frameworks only**: `Speech`, `AVFoundation`
 - **Web‑Demo** (statische Seite)
 
-> **Hinweis zu diesem Dokument:**  
-> Alle Codeblöcke sind mit **escapten Backticks** versehen (`\`\`\``), damit diese Chat‑Ansicht sie **nicht rendert**.  
+> **Note about this document:**  
+> All code blocks use **escaped backticks** (`\`\`\``) so this chat view does **not render** them.  
 > In deiner lokalen Datei kannst du einfach die Backslashes **stehen lassen** (Markdown-Renderer akzeptiert das in der Regel) **oder** sie entfernen, wenn du „echte“ Fences willst.
 
 ---
@@ -19,24 +19,24 @@
    Template: **App (macOS)**  
    Product Name: **STTBridge** · Interface: **SwiftUI** · Language: **Swift**
 
-2. **SwiftNIO hinzufügen**  
+2. **Add SwiftNIO**  
    - Projekt (blaues Icon) → Tab **Package Dependencies** → **+**
    - URL: `https://github.com/apple/swift-nio.git` → **Add Package**
    - Pakete dem **App‑Target STTBridge** zuweisen: **NIO**, **NIOHTTP1**, **NIOWebSocket**
 
-3. **Privacy‑Keys** setzen (Targets → STTBridge → **Info**)  
-   - `NSMicrophoneUsageDescription` : „Zugriff auf Mikrofon für lokale STT.“  
-   - `NSSpeechRecognitionUsageDescription` : „Spracherkennung wird lokal auf diesem Mac ausgeführt.“
+3. **Set privacy keys** (Targets → STTBridge → **Info**)  
+   - `NSMicrophoneUsageDescription` : "Access to the microphone for local STT."  
+   - `NSSpeechRecognitionUsageDescription` : "Speech recognition runs locally on this Mac."
 
 4. **(Empfohlen) App Sandbox** (Targets → **Signing & Capabilities** → **+ Capability** → App Sandbox)  
    - **Network** → **Incoming Connections (Server)**  
    - **Hardware** → **Audio Input (Microphone)**  
    - **Speech Recognition** aktivieren
 
-5. **Statische Web‑Ressourcen**  
+5. **Static web resources**  
    - Im Finder einen Ordner **WebRoot** anlegen mit `index.html`, `app.js`, `styles.css` (siehe unten).  
    - **In Xcode importieren**: im Navigator auf das Target ziehen →
-     **Create folder references** (blauer Ordner!) auswählen.
+     choose **Create folder references** (blue folder).
 
 6. **Ohne Debugger laufen lassen** (optional, stabiler)  
    - Product → Scheme → Edit Scheme… → **Run**  
@@ -45,7 +45,7 @@
 
 ---
 
-## 2) Dateien anlegen (Swift‑Quellcode)
+## 2) Create Files (Swift Source)
 
 Lege in Xcode einen Ordner **Server** an und erstelle dort diese Dateien.
 
@@ -270,7 +270,7 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
                 }
                 // final callback
                 do {
-                    guard let f = fmt, !collected.isEmpty else { throw AudioError.io("TTS lieferte keine Audiodaten") }
+                    guard let f = fmt, !collected.isEmpty else { throw AudioError.io("TTS produced no audio data") }
                     let total = collected.reduce(0) { $0 + Int($1.frameLength) }
                     guard let stitched = AVAudioPCMBuffer(pcmFormat: f, frameCapacity: AVAudioFrameCount(total)) else {
                         throw AudioError.conversionFailed("alloc")
@@ -327,7 +327,7 @@ final class STTEngine {
         let req = SFSpeechURLRecognitionRequest(url: url)
         if cfg.offlineOnly || (offline ?? false) {
             if rec.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
-            else { throw APIError.preconditionFailed("offline=true angefragt, On‑Device für \(lang) nicht verfügbar.") }
+            else { throw APIError.preconditionFailed("offline=true requested, on-device recognition for \(lang) is not available.") }
         }
         return try await recognize(recognizer: rec, request: req)
     }
@@ -353,7 +353,7 @@ final class STTEngine {
     private func recognize(recognizer: SFSpeechRecognizer, request: SFSpeechRecognitionRequest) async throws -> STTResponse {
         try await withCheckedThrowingContinuation { cont in
             recognizer.recognitionTask(with: request) { result, error in
-                if let e = error { cont.resume(throwing: APIError.internalError("STT Fehler: \(e.localizedDescription)")); return }
+                if let e = error { cont.resume(throwing: APIError.internalError("STT error: \(e.localizedDescription)")); return }
                 guard let r = result else { return }
                 if r.isFinal {
                     let best = r.bestTranscription
@@ -393,7 +393,7 @@ final class STTStreamSession {
         req.shouldReportPartialResults = true
         if onDevice {
             if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
-            else { throw APIError.preconditionFailed("offline=true angefragt, On‑Device nicht verfügbar.") }
+            else { throw APIError.preconditionFailed("offline=true requested, on-device recognition is not available.") }
         }
         request = req
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
@@ -479,7 +479,7 @@ final class HTTPServer {
             .childChannelOption(ChannelOptions.recvAllocator, value: AdaptiveRecvByteBufferAllocator())
 
         let ch = try bootstrap.bind(host: cfg.bindHost, port: cfg.port).wait()
-        print("🔊 STTBridge läuft auf http://\(cfg.bindHost):\(cfg.port)")
+        print("🔊 STTBridge running at http://\(cfg.bindHost):\(cfg.port)")
         try ch.closeFuture.wait()
     }
 
@@ -578,7 +578,7 @@ final class HTTPServer {
         private func verifyAuth(_ head: HTTPRequestHead) -> APIError? {
             guard let required = server.cfg.authToken else { return nil }
             let provided = head.headers.first(name: "Authorization")?.replacingOccurrences(of: "Bearer ", with: "")
-            if provided != required { return .unauthorized("Fehlender oder ungültiger Token.") }
+            if provided != required { return .unauthorized("Missing or invalid token.") }
             return nil
         }
 
@@ -634,19 +634,19 @@ final class HTTPServer {
                 if let url = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "WebRoot"),
                    let data = try? Data(contentsOf: url) {
                     writeBytes(context, data: data, contentType: "text/html; charset=utf-8", extra: extra)
-                } else { writeError(context, .internalError("index.html fehlt"), extra: extra) }
+                } else { writeError(context, .internalError("index.html is missing"), extra: extra) }
 
             case (.GET, "/app.js"):
                 if let url = Bundle.main.url(forResource: "app", withExtension: "js", subdirectory: "WebRoot"),
                    let data = try? Data(contentsOf: url) {
                     writeBytes(context, data: data, contentType: "application/javascript", extra: extra)
-                } else { writeError(context, .internalError("app.js fehlt"), extra: extra) }
+                } else { writeError(context, .internalError("app.js is missing"), extra: extra) }
 
             case (.GET, "/styles.css"):
                 if let url = Bundle.main.url(forResource: "styles", withExtension: "css", subdirectory: "WebRoot"),
                    let data = try? Data(contentsOf: url) {
                     writeBytes(context, data: data, contentType: "text/css", extra: extra)
-                } else { writeError(context, .internalError("styles.css fehlt"), extra: extra) }
+                } else { writeError(context, .internalError("styles.css is missing"), extra: extra) }
 
             case (.POST, "/stt"):
                 if let err = verifyAuth(head) { writeError(context, err, extra: extra); return }
@@ -670,7 +670,7 @@ final class HTTPServer {
                     } catch let e as APIError {
                         context.eventLoop.execute { self.writeError(context, e, extra: extra) }
                     } catch {
-                        context.eventLoop.execute { self.writeError(context, .internalError("Interner Fehler"), extra: extra) }
+                        context.eventLoop.execute { self.writeError(context, .internalError("Internal error"), extra: extra) }
                     }
                 }
 
@@ -679,7 +679,7 @@ final class HTTPServer {
                 var copy = body
                 guard let data = copy.readData(length: body.readableBytes),
                       let payload = try? JSONDecoder().decode(TTSPayload.self, from: data) else {
-                    writeError(context, .badRequest("Ungültiger JSON-Body"), extra: extra); return
+                    writeError(context, .badRequest("Invalid JSON body"), extra: extra); return
                 }
                 if payload.speakLocal ?? false {
                     Task { @MainActor in
@@ -692,7 +692,7 @@ final class HTTPServer {
                             let wav = try await self.server.tts.synthesizeToWAV(text: payload.text, voiceId: payload.voiceId, rate: payload.rate, pitch: payload.pitch)
                             context.eventLoop.execute { self.writeBytes(context, data: wav, contentType: "audio/wav", extra: extra) }
                         } catch {
-                            context.eventLoop.execute { self.writeError(context, .internalError("TTS-Fehler: \(error)"), extra: extra) }
+                            context.eventLoop.execute { self.writeError(context, .internalError("TTS error: \(error)"), extra: extra) }
                         }
                     }
                 }
@@ -743,7 +743,7 @@ final class WebSocketStreamHandler: ChannelInboundHandler {
 
 ---
 
-## 3) SwiftUI App‑Gerüst
+## 3) SwiftUI App Skeleton
 
 ### 3.1 `STTBridgeApp.swift` + `ContentView.swift`
 \`\`\`swift
@@ -762,7 +762,7 @@ struct STTBridgeApp: App {
 }
 
 final class ServerManager: ObservableObject {
-    @Published var status: String = "Startet…"
+    @Published var status: String = "Starting..."
     private var server: HTTPServer?
 
     init() {
@@ -774,10 +774,10 @@ final class ServerManager: ObservableObject {
             let srv = HTTPServer(config: cfg)
             self.server = srv
             do {
-                DispatchQueue.main.async { self.status = "Server läuft auf http://\(cfg.bindHost):\(cfg.port)" }
+                DispatchQueue.main.async { self.status = "Server running at http://\(cfg.bindHost):\(cfg.port)" }
                 try srv.start()
             } catch {
-                DispatchQueue.main.async { self.status = "Serverfehler: \(error)" }
+                DispatchQueue.main.async { self.status = "Server error: \(error)" }
             }
         }
     }
@@ -813,11 +813,11 @@ struct ContentView: View {
 </head>
 <body>
 <main>
-  <h1>STTBridge – lokale Speech‑Bridge</h1>
+  <h1>STTBridge – local speech bridge</h1>
   <section class="card">
     <h2>WebSocket STT</h2>
     <div class="row">
-      <label>Sprache:</label><input id="lang" value="de-DE">
+      <label>Language:</label><input id="lang" value="de-DE">
       <label><input id="offline" type="checkbox"> offline</label>
       <label><input id="partials" type="checkbox" checked> Partials</label>
     </div>
@@ -829,14 +829,14 @@ struct ContentView: View {
   </section>
   <section class="card">
     <h2>TTS</h2>
-    <div class="row"><textarea id="ttsText" rows="3">Hallo Stuttgart! Das ist eine lokale TTS‑Demo.</textarea></div>
+    <div class="row"><textarea id="ttsText" rows="3">Hello Stuttgart! This is a local TTS demo.</textarea></div>
     <div class="row">
       <label>Voice ID:</label><input id="voiceId" size="40" placeholder="com.apple.speech.synthesis.voice...">
       <label>Rate:</label><input id="rate" type="number" min="0.5" max="2.0" step="0.1" value="1.0">
       <label>Pitch:</label><input id="pitch" type="number" min="-1" max="1" step="0.1" value="0">
       <label><input id="speakLocal" type="checkbox"> direkt am Mac ausgeben</label>
     </div>
-    <div class="row"><button id="ttsBtn">Sprechen</button></div>
+    <div class="row"><button id="ttsBtn">Speak</button></div>
     <audio id="player" controls></audio>
   </section>
 </main>
@@ -860,13 +860,13 @@ const start = async ()=>{
   const proc = audioCtx.createScriptProcessor(4096,1,1);
   source.connect(proc); proc.connect(audioCtx.destination);
   ws = new WebSocket(`ws://${location.host}/stt/stream?lang=${encodeURIComponent(lang)}&offline=${offline}&partials=${partials}`);
-  ws.onopen = ()=>log('WS verbunden');
+  ws.onopen = ()=>log('WS connected');
   ws.onmessage = ev=>{ try{ const o=JSON.parse(ev.data);
     if(o.type==='partial') log('· '+o.text);
     if(o.type==='final') log('✔ '+o.text+(o.confidence!=null?` (conf=${o.confidence.toFixed(2)})`:''));
-    if(o.type==='error') log('⚠ Fehler: '+o.error);
+    if(o.type==='error') log('⚠ Error: '+o.error);
   }catch{} };
-  ws.onclose = ()=>log('WS geschlossen');
+  ws.onclose = ()=>log('WS closed');
   proc.onaudioprocess = e=>{
     if(!ws || ws.readyState!==1) return;
     const input=e.inputBuffer.getChannelData(0);
@@ -892,7 +892,7 @@ document.getElementById('ttsBtn').onclick=async()=>{
   const pitch=parseFloat(document.getElementById('pitch').value);
   const speakLocal=document.getElementById('speakLocal').checked;
   const res=await fetch('/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,voiceId,rate,pitch,speakLocal})});
-  if(speakLocal){ await res.json(); alert('Lokale Ausgabe gestartet.'); return; }
+  if(speakLocal){ await res.json(); alert('Local playback started.'); return; }
   const blob=await res.blob(); const url=URL.createObjectURL(blob); const player=document.getElementById('player'); player.src=url; player.play();
 };
 \`\`\`
@@ -910,9 +910,9 @@ pre{background:#0a0f14;color:#7dd3fc;padding:12px;border-radius:8px;height:220px
 
 ---
 
-## 5) Starten & Testen
+## 5) Run & Test
 
-1. **Run** (▶︎ oder `⌘R`). Erlaubnisdialoge für **Mikrofon** und **Spracherkennung** bestätigen.
+1. **Run** (▶︎ or `⌘R`). Approve the permission dialogs for **Microphone** and **Speech Recognition**.
 2. Browser: `http://127.0.0.1:8787/` → Web‑Demo.
 3. **cURL**:
 \`\`\`bash
@@ -926,11 +926,11 @@ curl --data-binary @sample.wav -H "Content-Type: audio/wav" \
 # TTS → WAV
 curl -X POST http://127.0.0.1:8787/tts \
   -H 'Content-Type: application/json' \
-  -d '{"text":"Hallo Stuttgart"}' --output out.wav
+  -d '{"text":"Hello Stuttgart"}' --output out.wav
 \`\`\`
 
 > **Stabile Freigaben:** App in **/Applications** kopieren und immer **dieselbe Kopie** starten.  
-> Bei Bedarf TCC zurücksetzen:  
+> Reset TCC if needed:  
 > \`\`\`bash
 > tccutil reset Microphone local.sttbridge
 > tccutil reset SpeechRecognition local.sttbridge
@@ -939,10 +939,10 @@ curl -X POST http://127.0.0.1:8787/tts \
 ---
 
 ## 6) Optional: Auth & ENV
-- `AUTH_TOKEN=secret` → mutierende Endpunkte verlangen `Authorization: Bearer secret`.
+- `AUTH_TOKEN=secret` → mutating endpoints require `Authorization: Bearer secret`.
 - `PORT`, `BIND_HOST`, `DEFAULT_LANG`, `OFFLINE_ONLY` werden gelesen.
 
 ---
 
 ## 7) MVP‑Scope & Next
-- Multipart‑Upload für `/stt`, `/tts/stream` (SSE/chunked), Prometheus‑Metriken, LaunchAgent, Menüleisten‑UI sind leicht nachrüstbar.
+- Multipart upload for `/stt`, `/tts/stream` (SSE/chunked), Prometheus metrics, LaunchAgent, and a menu bar UI can be added easily.

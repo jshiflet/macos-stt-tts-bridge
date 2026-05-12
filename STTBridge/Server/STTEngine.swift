@@ -8,8 +8,8 @@ final class STTEngine {
     private var cachedRecognizers: [String: SFSpeechRecognizer] = [:]
     private let recognizerQueue = DispatchQueue(label: "com.sttbridge.recognizerCache")
 
-    init(config: Config) { 
-        self.cfg = config 
+    init(config: Config) {
+        self.cfg = config
         // Prewarm recognizers for default languages
         Task.detached { [weak self] in
             guard let self = self else { return }
@@ -48,12 +48,11 @@ final class STTEngine {
     }
 
     func transcribeFile(url: URL, lang: String, offline: Bool?) async throws -> STTResponse {
-        let locale = Locale(identifier: lang)
         guard let rec = getRecognizer(for: lang) else { throw APIError.badRequest("Unsupported language \(lang)") }
         let req = SFSpeechURLRecognitionRequest(url: url)
         if cfg.offlineOnly || (offline ?? false) {
             if rec.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
-            else { throw APIError.preconditionFailed("offline=true angefragt, On‑Device für \(lang) nicht verfügbar.") }
+            else { throw APIError.preconditionFailed("offline=true requested, on-device recognition for \(lang) is not available.") }
         }
         return try await recognize(recognizer: rec, request: req)
     }
@@ -83,12 +82,11 @@ final class STTEngine {
     }
     
     private func recognizeBuffer(buffer: AVAudioPCMBuffer, lang: String, offline: Bool?) async throws -> STTResponse {
-        let locale = Locale(identifier: lang)
         guard let rec = getRecognizer(for: lang) else { throw APIError.badRequest("Unsupported language \(lang)") }
         let req = SFSpeechAudioBufferRecognitionRequest()
         if cfg.offlineOnly || (offline ?? false) {
             if rec.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
-            else { throw APIError.preconditionFailed("offline=true angefragt, On‑Device für \(lang) nicht verfügbar.") }
+            else { throw APIError.preconditionFailed("offline=true requested, on-device recognition for \(lang) is not available.") }
         }
         req.append(buffer)
         req.endAudio()
@@ -98,7 +96,7 @@ final class STTEngine {
     private func recognize(recognizer: SFSpeechRecognizer, request: SFSpeechRecognitionRequest) async throws -> STTResponse {
         try await withCheckedThrowingContinuation { cont in
             recognizer.recognitionTask(with: request) { result, error in
-                if let e = error { cont.resume(throwing: APIError.internalError("STT Fehler: \(e.localizedDescription)")); return }
+                if let e = error { cont.resume(throwing: APIError.internalError("STT error: \(e.localizedDescription)")); return }
                 guard let r = result else { return }
                 if r.isFinal {
                     let best = r.bestTranscription
@@ -113,7 +111,7 @@ final class STTEngine {
     }
 }
 
-// Live WS-Stream
+// Live WS stream
 final class STTStreamSession {
     private let recognizer: SFSpeechRecognizer
     private var request: SFSpeechAudioBufferRecognitionRequest?
@@ -138,7 +136,7 @@ final class STTStreamSession {
         req.shouldReportPartialResults = true
         if onDevice {
             if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
-            else { throw APIError.preconditionFailed("offline=true angefragt, On‑Device nicht verfügbar.") }
+            else { throw APIError.preconditionFailed("offline=true requested, on-device recognition is not available.") }
         }
         request = req
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in

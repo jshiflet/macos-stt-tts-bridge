@@ -27,6 +27,11 @@ struct TTSPayload: Codable {
     let speakLocal: Bool?
 }
 
+struct SayPayload: Codable {
+    let text: String
+    let speakLocal: Bool?
+}
+
 struct VoiceInfo: Codable {
     let name: String
     let identifier: String

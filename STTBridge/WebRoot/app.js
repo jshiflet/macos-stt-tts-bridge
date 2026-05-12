@@ -11,13 +11,13 @@ const start = async ()=>{
   const proc = audioCtx.createScriptProcessor(4096,1,1);
   source.connect(proc); proc.connect(audioCtx.destination);
   ws = new WebSocket(`ws://${location.host}/stt/stream?lang=${encodeURIComponent(lang)}&offline=${offline}&partials=${partials}`);
-  ws.onopen = ()=>log('WS verbunden');
+  ws.onopen = ()=>log('WS connected');
   ws.onmessage = ev=>{ try{ const o=JSON.parse(ev.data);
     if(o.type==='partial') log('· '+o.text);
     if(o.type==='final') log('✔ '+o.text+(o.confidence!=null?` (conf=${o.confidence.toFixed(2)})`:''));
-    if(o.type==='error') log('⚠ Fehler: '+o.error);
+    if(o.type==='error') log('⚠ Error: '+o.error);
   }catch{} };
-  ws.onclose = ()=>log('WS geschlossen');
+  ws.onclose = ()=>log('WS closed');
   proc.onaudioprocess = e=>{
     if(!ws || ws.readyState!==1) return;
     const input=e.inputBuffer.getChannelData(0);
@@ -65,7 +65,7 @@ document.getElementById('ttsBtn').onclick=async()=>{
   const pitch=parseFloat(document.getElementById('pitch').value);
   const speakLocal=document.getElementById('speakLocal').checked;
   const res=await fetch('/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,voiceId,rate,pitch,speakLocal})});
-  if(speakLocal){ await res.json(); alert('Lokale Ausgabe gestartet.'); return; }
+  if(speakLocal){ await res.json(); alert('Local playback started.'); return; }
   const blob=await res.blob(); const url=URL.createObjectURL(blob); const player=document.getElementById('player'); player.src=url; player.play();
 };
 

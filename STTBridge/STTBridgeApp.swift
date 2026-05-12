@@ -8,7 +8,7 @@ struct STTBridgeApp: App {
     
     // Check if running headless (backend-only)
     private var isHeadless: Bool {
-        CommandLine.arguments.contains("--headless") || 
+        CommandLine.arguments.contains("--headless") ||
         CommandLine.arguments.contains("--no-ui")
     }
 
@@ -24,12 +24,11 @@ struct STTBridgeApp: App {
             }
         }
         .defaultSize(width: isHeadless ? 0 : 800, height: isHeadless ? 0 : 600)
-        .windowStyle(isHeadless ? .hiddenTitleBar : .automatic)
     }
 }
 
 final class ServerManager: ObservableObject {
-    @Published var status: String = "Startet…"
+    @Published var status: String = "Starting..."
     private var server: HTTPServer?
 
     init() {
@@ -41,22 +40,23 @@ final class ServerManager: ObservableObject {
             let srv = HTTPServer(config: cfg)
             self.server = srv
             do {
-                let msg = "Server läuft auf http://\(cfg.bindHost):\(cfg.port)"
+                let msg = "Server running at http://\(cfg.bindHost):\(cfg.port)"
                 DispatchQueue.main.async { self.status = msg }
                 
                 // Print to console for headless mode
-                if CommandLine.arguments.contains("--headless") || 
+                if CommandLine.arguments.contains("--headless") ||
                    CommandLine.arguments.contains("--no-ui") {
                     print("✓ \(msg)")
-                    print("✓ Drücke Ctrl+C zum Beenden")
+                    print("✓ Press Ctrl+C to quit")
                 }
                 
                 try srv.start()
             } catch {
-                let errMsg = "Serverfehler: \(error)"
+                let errMsg = "Server error: \(error)"
                 DispatchQueue.main.async { self.status = errMsg }
                 print("✗ \(errMsg)")
             }
         }
     }
 }
+    

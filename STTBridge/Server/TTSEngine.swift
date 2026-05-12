@@ -17,10 +17,34 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
         synth.speak(u)
     }
 
-    /// Hinweis zu besseren Stimmen:
-    /// macOS → Systemeinstellungen → Bedienungshilfen → Gesprochene Inhalte → "Stimmen".
-    /// Für die gewünschte Sprache (z. B. Deutsch) eine "Erweiterte"/"Enhanced" Stimme herunterladen.
-    /// AVSpeechSynthesizer kann **Siri**-Stimmen nicht direkt nutzen, aber Enhanced‑Stimmen sind deutlich hochwertiger.
+    func speakWithSay(_ text: String) async throws {
+        try await runSay(text: text, outputURL: nil)
+    }
+
+    func synthesizeWithSayToM4A(_ text: String) async throws -> Data {
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("m4a")
+        defer {
+            try? FileManager.default.removeItem(at: outputURL)
+        }
+
+        try await runSay(text: text, outputURL: outputURL)
+        do {
+            return try Data(contentsOf: outputURL)
+        } catch {
+            throw AudioError.io("Unable to read synthesized m4a file")
+        }
+    }
+
+    func synthesizeWithSayToFile(_ text: String, outputURL: URL) async throws {
+        try await runSay(text: text, outputURL: outputURL)
+    }
+
+    /// Note about better voices:
+    /// macOS -> System Settings -> Accessibility -> Spoken Content -> "Voices".
+    /// Download an "Enhanced" voice for the desired language (for example, German).
+    /// AVSpeechSynthesizer cannot use Siri voices directly, but enhanced voices are much higher quality.
     private func makeUtterance(text: String, voiceId: String?, rate: Double?, pitch: Double?) -> AVSpeechUtterance {
         let u = AVSpeechUtterance(string: text)
 
@@ -28,7 +52,7 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
         if let id = voiceId, !id.isEmpty, let v = AVSpeechSynthesisVoice(identifier: id) {
             u.voice = v
         } else {
-            // 2) Bevorzugt: Anna (de-DE), höchste Qualität
+            // 2) Preferred: Anna (de-DE), highest quality
             let candidates = AVSpeechSynthesisVoice.speechVoices().filter { $0.language == "de-DE" }
             if let annaBest = candidates
                 .filter({ $0.name == "Anna" })
@@ -37,12 +61,12 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
             {
                 u.voice = annaBest
             } else if let bestDE = candidates.sorted(by: { $0.quality.rawValue > $1.quality.rawValue }).first {
-                // 3) Fallback: beste deutsche Stimme
+                // 3) Fallback: best German voice
                 u.voice = bestDE
             }
         }
 
-        // Optional sinnvoll:
+        // Useful optional setting:
         u.prefersAssistiveTechnologySettings = true
 
         // Rate: map 0.5..2.0 around default for natural prosody
@@ -89,7 +113,7 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
                 // Final callback (frameLength == 0). This is where we process and resume.
                 do {
                     guard let f = fmt, !collected.isEmpty else {
-                        throw AudioError.io("TTS lieferte keine Audiodaten")
+                        throw AudioError.io("TTS produced no audio data")
                     }
                     let total = collected.reduce(0) { $0 + Int($1.frameLength) }
                     guard let stitched = AVAudioPCMBuffer(pcmFormat: f, frameCapacity: AVAudioFrameCount(total)) else {
@@ -120,5 +144,50 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
         }
         return wav
     }
-}
 
+    private func runSay(text: String, outputURL: URL?) async throws {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw APIError.badRequest("Text is required")
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+
+        var arguments: [String] = []
+        if let outputURL {
+            try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            arguments += [
+                "-o", outputURL.path,
+                "--file-format=m4af",
+                "--data-format=aac"
+            ]
+        }
+        arguments.append(text)
+        process.arguments = arguments
+
+        let stderrPipe = Pipe()
+        process.standardError = stderrPipe
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            process.terminationHandler = { process in
+                let errorData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                if process.terminationStatus == 0 {
+                    continuation.resume(returning: ())
+                    return
+                }
+
+                let errorMessage = String(data: errorData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                continuation.resume(throwing: AudioError.io(errorMessage?.isEmpty == false ? errorMessage! : "say command failed"))
+            }
+
+            do {
+                try process.run()
+            } catch {
+                process.terminationHandler = nil
+                continuation.resume(throwing: AudioError.io("Failed to launch say"))
+            }
+        }
+    }
+
+}

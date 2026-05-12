@@ -46,7 +46,7 @@ final class HTTPServer {
             .childChannelOption(ChannelOptions.recvAllocator, value: AdaptiveRecvByteBufferAllocator())
 
         let ch = try bootstrap.bind(host: cfg.bindHost, port: cfg.port).wait()
-        print("🔊 STTBridge läuft auf http://\(cfg.bindHost):\(cfg.port)")
+        print("🔊 STTBridge running at http://\(cfg.bindHost):\(cfg.port)")
         try ch.closeFuture.wait()
     }
 
@@ -146,7 +146,7 @@ final class HTTPServer {
         private func verifyAuth(_ head: HTTPRequestHead) -> APIError? {
             guard let required = server.cfg.authToken else { return nil }
             let provided = head.headers.first(name: "Authorization")?.replacingOccurrences(of: "Bearer ", with: "")
-            if provided != required { return .unauthorized("Fehlender oder ungültiger Token.") }
+            if provided != required { return .unauthorized("Missing or invalid token.") }
             return nil
         }
 
@@ -202,25 +202,25 @@ final class HTTPServer {
                 if let url = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "WebRoot"),
                    let data = try? Data(contentsOf: url) {
                     writeBytes(context, data: data, contentType: "text/html; charset=utf-8", extra: extra)
-                } else { writeError(context, .internalError("index.html fehlt"), extra: extra) }
+                } else { writeError(context, .internalError("index.html is missing"), extra: extra) }
 
             case (.GET, "/app.js"):
                 if let url = Bundle.main.url(forResource: "app", withExtension: "js", subdirectory: "WebRoot"),
                    let data = try? Data(contentsOf: url) {
                     writeBytes(context, data: data, contentType: "application/javascript", extra: extra)
-                } else { writeError(context, .internalError("app.js fehlt"), extra: extra) }
+                } else { writeError(context, .internalError("app.js is missing"), extra: extra) }
 
             case (.GET, "/styles.css"):
                 if let url = Bundle.main.url(forResource: "styles", withExtension: "css", subdirectory: "WebRoot"),
                    let data = try? Data(contentsOf: url) {
                     writeBytes(context, data: data, contentType: "text/css", extra: extra)
-                } else { writeError(context, .internalError("styles.css fehlt"), extra: extra) }
+                } else { writeError(context, .internalError("styles.css is missing"), extra: extra) }
 
             case (.POST, "/stt"):
                 if let err = verifyAuth(head) { writeError(context, err, extra: extra); return }
                 let comps = URLComponents(string: head.uri)
-                let lang = comps?.queryItems?.first(where: { $0.name == "lang" })?.value ?? 
-                           head.headers.first(name: "X-Language") ?? 
+                let lang = comps?.queryItems?.first(where: { $0.name == "lang" })?.value ??
+                           head.headers.first(name: "X-Language") ??
                            server.cfg.defaultLang
                 let offline = (server.cfg.offlineOnly || ((comps?.queryItems?.first(where: { $0.name == "offline" })?.value ?? "false").lowercased() == "true"))
                 let ct = head.headers.first(name: "Content-Type")?.lowercased() ?? "application/octet-stream"
@@ -231,6 +231,8 @@ final class HTTPServer {
                 let sampleRateHeader = head.headers.first(name: "X-Sample-Rate")
                 let channelCountHeader = head.headers.first(name: "X-Channel-Count")
                 
+                let eventLoop = context.eventLoop
+                let loopBoundContext = NIOLoopBound(context, eventLoop: eventLoop)
                 Task.detached {
                     do {
                         let resp: STTResponse
@@ -248,11 +250,21 @@ final class HTTPServer {
                             // Regular WAV file
                             resp = try await self.server.stt.transcribeRaw(data: payload, sampleRate: nil, channels: nil, lang: lang, offline: offline)
                         }
-                        context.eventLoop.execute { self.writeJSON(context, value: resp, extra: extra) }
+                        let encoded = try await MainActor.run {
+                            try JSONEncoder().encode(resp)
+                        }
+                        eventLoop.execute {
+                            self.writeBytes(
+                                loopBoundContext.value,
+                                data: encoded,
+                                contentType: "application/json; charset=utf-8",
+                                extra: extra
+                            )
+                        }
                     } catch let e as APIError {
-                        context.eventLoop.execute { self.writeError(context, e, extra: extra) }
+                        eventLoop.execute { self.writeError(loopBoundContext.value, e, extra: extra) }
                     } catch {
-                        context.eventLoop.execute { self.writeError(context, .internalError("Interner Fehler"), extra: extra) }
+                        eventLoop.execute { self.writeError(loopBoundContext.value, .internalError("Internal error"), extra: extra) }
                     }
                 }
 
@@ -261,7 +273,7 @@ final class HTTPServer {
                 var copy = body
                 guard let data = copy.readData(length: body.readableBytes),
                       let payload = try? JSONDecoder().decode(TTSPayload.self, from: data) else {
-                    writeError(context, .badRequest("Ungültiger JSON-Body"), extra: extra); return
+                    writeError(context, .badRequest("Invalid JSON body"), extra: extra); return
                 }
                 if payload.speakLocal ?? false {
                     Task { @MainActor in
@@ -269,12 +281,49 @@ final class HTTPServer {
                         self.writeJSON(context, value: ["ok": true], extra: extra)
                     }
                 } else {
+                    let eventLoop = context.eventLoop
+                    let loopBoundContext = NIOLoopBound(context, eventLoop: eventLoop)
                     Task {
                         do {
                             let wav = try await self.server.tts.synthesizeToWAV(text: payload.text, voiceId: payload.voiceId, rate: payload.rate, pitch: payload.pitch)
-                            context.eventLoop.execute { self.writeBytes(context, data: wav, contentType: "audio/wav", extra: extra) }
+                            eventLoop.execute { self.writeBytes(loopBoundContext.value, data: wav, contentType: "audio/wav", extra: extra) }
                         } catch {
-                            context.eventLoop.execute { self.writeError(context, .internalError("TTS-Fehler: \(error)"), extra: extra) }
+                            eventLoop.execute { self.writeError(loopBoundContext.value, .internalError("TTS error: \(error)"), extra: extra) }
+                        }
+                    }
+                }
+
+            case (.POST, "/say"):
+                if let err = verifyAuth(head) { writeError(context, err, extra: extra); return }
+                var copy = body
+                guard let data = copy.readData(length: body.readableBytes),
+                      let payload = try? JSONDecoder().decode(SayPayload.self, from: data) else {
+                    writeError(context, .badRequest("Invalid JSON body"), extra: extra); return
+                }
+                if payload.speakLocal ?? false {
+                    let eventLoop = context.eventLoop
+                    let loopBoundContext = NIOLoopBound(context, eventLoop: eventLoop)
+                    Task {
+                        do {
+                            try await self.server.tts.speakWithSay(payload.text)
+                            eventLoop.execute { self.writeJSON(loopBoundContext.value, value: ["ok": true], extra: extra) }
+                        } catch let error as APIError {
+                            eventLoop.execute { self.writeError(loopBoundContext.value, error, extra: extra) }
+                        } catch {
+                            eventLoop.execute { self.writeError(loopBoundContext.value, .internalError("say error: \(error)"), extra: extra) }
+                        }
+                    }
+                } else {
+                    let eventLoop = context.eventLoop
+                    let loopBoundContext = NIOLoopBound(context, eventLoop: eventLoop)
+                    Task {
+                        do {
+                            let m4a = try await self.server.tts.synthesizeWithSayToM4A(payload.text)
+                            eventLoop.execute { self.writeBytes(loopBoundContext.value, data: m4a, contentType: "audio/mp4", extra: extra) }
+                        } catch let error as APIError {
+                            eventLoop.execute { self.writeError(loopBoundContext.value, error, extra: extra) }
+                        } catch {
+                            eventLoop.execute { self.writeError(loopBoundContext.value, .internalError("say error: \(error)"), extra: extra) }
                         }
                     }
                 }

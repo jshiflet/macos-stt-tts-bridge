@@ -18,10 +18,16 @@ final class HTTPServer {
     private let cfg: Config
     private let stt: STTEngine
     private let tts = TTSEngine()
+    private var channel: Channel?
 
     init(config: Config) {
         self.cfg = config
         self.stt = STTEngine(config: config)
+    }
+
+    /// Closes the listening channel, which causes `start()` to return.
+    func stop() {
+        channel?.close(promise: nil)
     }
 
     func start() throws {
@@ -46,8 +52,10 @@ final class HTTPServer {
             .childChannelOption(ChannelOptions.recvAllocator, value: AdaptiveRecvByteBufferAllocator())
 
         let ch = try bootstrap.bind(host: cfg.bindHost, port: cfg.port).wait()
+        self.channel = ch
         print("🔊 STTBridge running at http://\(cfg.bindHost):\(cfg.port)")
         try ch.closeFuture.wait()
+        try? group.syncShutdownGracefully()
     }
 
     private func installWebSocket(channel: Channel, request: HTTPRequestHead) -> EventLoopFuture<Void> {
@@ -163,6 +171,7 @@ final class HTTPServer {
             var headers = HTTPHeaders(); headers.add(name: "Content-Type", value: "application/json; charset=utf-8")
             if let e = extra { for (n,v) in e { headers.add(name:n, value:v) } }
             let data = try! JSONEncoder().encode(value)
+            headers.add(name: "Content-Length", value: String(data.count))
             var buf = context.channel.allocator.buffer(capacity: data.count); buf.writeBytes(data)
             writeHeadBodyEnd(context, status: status, headers: headers, body: buf)
         }
@@ -170,12 +179,89 @@ final class HTTPServer {
         private func writeBytes(_ context: ChannelHandlerContext, data: Data, contentType: String, status: HTTPResponseStatus = .ok, extra: HTTPHeaders? = nil) {
             var headers = HTTPHeaders(); headers.add(name: "Content-Type", value: contentType)
             if let e = extra { for (n,v) in e { headers.add(name:n, value:v) } }
+            headers.add(name: "Content-Length", value: String(data.count))
             var buf = context.channel.allocator.buffer(capacity: data.count); buf.writeBytes(data)
             writeHeadBodyEnd(context, status: status, headers: headers, body: buf)
         }
 
+        /// Builds an `attachment` Content-Disposition with a filename derived from `text`.
+        static func attachmentHeader(text: String, ext: String, fallback: String = "speech") -> (name: String, value: String) {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let prefix = String(trimmed.prefix(24))
+            let sanitized = prefix
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .joined(separator: "-")
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+                .lowercased()
+            let slug = sanitized.isEmpty ? fallback : sanitized
+            return ("Content-Disposition", "attachment; filename=\"\(slug).\(ext)\"")
+        }
+
         private func writeError(_ context: ChannelHandlerContext, _ error: APIError, extra: HTTPHeaders? = nil) {
             writeJSON(context, value: ["error": error.message], status: .init(statusCode: error.statusCode), extra: extra)
+        }
+
+        private func performTTS(context: ChannelHandlerContext,
+                                text: String,
+                                voiceId: String?,
+                                rate: Double?,
+                                pitch: Double?,
+                                speakLocal: Bool,
+                                extra: HTTPHeaders) {
+            let eventLoop = context.eventLoop
+            let loopBoundContext = NIOLoopBound(context, eventLoop: eventLoop)
+            if speakLocal {
+                Task { @MainActor in
+                    self.server.tts.speakLocal(text, voiceId: voiceId, rate: rate, pitch: pitch)
+                    eventLoop.execute { self.writeJSON(loopBoundContext.value, value: ["ok": true], extra: extra) }
+                }
+            } else {
+                let attach = Self.attachmentHeader(text: text, ext: "wav")
+                Task {
+                    do {
+                        let wav = try await self.server.tts.synthesizeToWAV(text: text, voiceId: voiceId, rate: rate, pitch: pitch)
+                        var responseHeaders = extra
+                        responseHeaders.add(name: attach.name, value: attach.value)
+                        eventLoop.execute { self.writeBytes(loopBoundContext.value, data: wav, contentType: "audio/wav", extra: responseHeaders) }
+                    } catch {
+                        eventLoop.execute { self.writeError(loopBoundContext.value, .internalError("TTS error: \(error)"), extra: extra) }
+                    }
+                }
+            }
+        }
+
+        private func performSay(context: ChannelHandlerContext,
+                                text: String,
+                                speakLocal: Bool,
+                                extra: HTTPHeaders) {
+            let eventLoop = context.eventLoop
+            let loopBoundContext = NIOLoopBound(context, eventLoop: eventLoop)
+            if speakLocal {
+                Task {
+                    do {
+                        try await self.server.tts.speakWithSay(text)
+                        eventLoop.execute { self.writeJSON(loopBoundContext.value, value: ["ok": true], extra: extra) }
+                    } catch let error as APIError {
+                        eventLoop.execute { self.writeError(loopBoundContext.value, error, extra: extra) }
+                    } catch {
+                        eventLoop.execute { self.writeError(loopBoundContext.value, .internalError("say error: \(error)"), extra: extra) }
+                    }
+                }
+            } else {
+                let attach = Self.attachmentHeader(text: text, ext: "m4a")
+                Task {
+                    do {
+                        let m4a = try await self.server.tts.synthesizeWithSayToM4A(text)
+                        var responseHeaders = extra
+                        responseHeaders.add(name: attach.name, value: attach.value)
+                        eventLoop.execute { self.writeBytes(loopBoundContext.value, data: m4a, contentType: "audio/mp4", extra: responseHeaders) }
+                    } catch let error as APIError {
+                        eventLoop.execute { self.writeError(loopBoundContext.value, error, extra: extra) }
+                    } catch {
+                        eventLoop.execute { self.writeError(loopBoundContext.value, .internalError("say error: \(error)"), extra: extra) }
+                    }
+                }
+            }
         }
 
         private func route(context: ChannelHandlerContext, head: HTTPRequestHead, body: ByteBuffer) {
@@ -275,23 +361,32 @@ final class HTTPServer {
                       let payload = try? JSONDecoder().decode(TTSPayload.self, from: data) else {
                     writeError(context, .badRequest("Invalid JSON body"), extra: extra); return
                 }
-                if payload.speakLocal ?? false {
-                    Task { @MainActor in
-                        self.server.tts.speakLocal(payload.text, voiceId: payload.voiceId, rate: payload.rate, pitch: payload.pitch)
-                        self.writeJSON(context, value: ["ok": true], extra: extra)
-                    }
-                } else {
-                    let eventLoop = context.eventLoop
-                    let loopBoundContext = NIOLoopBound(context, eventLoop: eventLoop)
-                    Task {
-                        do {
-                            let wav = try await self.server.tts.synthesizeToWAV(text: payload.text, voiceId: payload.voiceId, rate: payload.rate, pitch: payload.pitch)
-                            eventLoop.execute { self.writeBytes(loopBoundContext.value, data: wav, contentType: "audio/wav", extra: extra) }
-                        } catch {
-                            eventLoop.execute { self.writeError(loopBoundContext.value, .internalError("TTS error: \(error)"), extra: extra) }
-                        }
-                    }
+                performTTS(context: context,
+                           text: payload.text,
+                           voiceId: payload.voiceId,
+                           rate: payload.rate,
+                           pitch: payload.pitch,
+                           speakLocal: payload.speakLocal ?? false,
+                           extra: extra)
+
+            case (.GET, "/tts"):
+                if let err = verifyAuth(head) { writeError(context, err, extra: extra); return }
+                let comps = URLComponents(string: head.uri)
+                guard let text = comps?.queryItems?.first(where: { $0.name == "text" })?.value,
+                      !text.isEmpty else {
+                    writeError(context, .badRequest("Missing 'text' query parameter"), extra: extra); return
                 }
+                let voiceId = comps?.queryItems?.first(where: { $0.name == "voiceId" })?.value
+                let rate = (comps?.queryItems?.first(where: { $0.name == "rate" })?.value).flatMap { Double($0) }
+                let pitch = (comps?.queryItems?.first(where: { $0.name == "pitch" })?.value).flatMap { Double($0) }
+                let speakLocal = ((comps?.queryItems?.first(where: { $0.name == "speakLocal" })?.value) ?? "false").lowercased() == "true"
+                performTTS(context: context,
+                           text: text,
+                           voiceId: voiceId,
+                           rate: rate,
+                           pitch: pitch,
+                           speakLocal: speakLocal,
+                           extra: extra)
 
             case (.POST, "/say"):
                 if let err = verifyAuth(head) { writeError(context, err, extra: extra); return }
@@ -300,33 +395,20 @@ final class HTTPServer {
                       let payload = try? JSONDecoder().decode(SayPayload.self, from: data) else {
                     writeError(context, .badRequest("Invalid JSON body"), extra: extra); return
                 }
-                if payload.speakLocal ?? false {
-                    let eventLoop = context.eventLoop
-                    let loopBoundContext = NIOLoopBound(context, eventLoop: eventLoop)
-                    Task {
-                        do {
-                            try await self.server.tts.speakWithSay(payload.text)
-                            eventLoop.execute { self.writeJSON(loopBoundContext.value, value: ["ok": true], extra: extra) }
-                        } catch let error as APIError {
-                            eventLoop.execute { self.writeError(loopBoundContext.value, error, extra: extra) }
-                        } catch {
-                            eventLoop.execute { self.writeError(loopBoundContext.value, .internalError("say error: \(error)"), extra: extra) }
-                        }
-                    }
-                } else {
-                    let eventLoop = context.eventLoop
-                    let loopBoundContext = NIOLoopBound(context, eventLoop: eventLoop)
-                    Task {
-                        do {
-                            let m4a = try await self.server.tts.synthesizeWithSayToM4A(payload.text)
-                            eventLoop.execute { self.writeBytes(loopBoundContext.value, data: m4a, contentType: "audio/mp4", extra: extra) }
-                        } catch let error as APIError {
-                            eventLoop.execute { self.writeError(loopBoundContext.value, error, extra: extra) }
-                        } catch {
-                            eventLoop.execute { self.writeError(loopBoundContext.value, .internalError("say error: \(error)"), extra: extra) }
-                        }
-                    }
+                performSay(context: context,
+                           text: payload.text,
+                           speakLocal: payload.speakLocal ?? false,
+                           extra: extra)
+
+            case (.GET, "/say"):
+                if let err = verifyAuth(head) { writeError(context, err, extra: extra); return }
+                let comps = URLComponents(string: head.uri)
+                guard let text = comps?.queryItems?.first(where: { $0.name == "text" })?.value,
+                      !text.isEmpty else {
+                    writeError(context, .badRequest("Missing 'text' query parameter"), extra: extra); return
                 }
+                let speakLocal = ((comps?.queryItems?.first(where: { $0.name == "speakLocal" })?.value) ?? "false").lowercased() == "true"
+                performSay(context: context, text: text, speakLocal: speakLocal, extra: extra)
 
             default:
                 let headResp = HTTPResponseHead(version: .http1_1, status: .notFound, headers: extra)

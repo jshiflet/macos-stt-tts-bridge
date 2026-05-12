@@ -30,10 +30,10 @@ struct SayAudioDocument: FileDocument {
 @MainActor
 class AppViewModel: ObservableObject {
     // TTS Properties
-    @Published var ttsText: String = "Hello Stuttgart! This is a local TTS demo."
+    @Published var ttsText: String = "Hello World! This is a local TTS demo."
     @Published var voices: [VoiceInfo] = []
     @Published var selectedVoiceIdentifier: String? = nil
-    @Published var sayText: String = "Hello Stuttgart! This is a macOS say demo."
+    @Published var sayText: String = "Hello World! This is a macOS say demo."
     @Published var sayOutputToFile: Bool = false
     @Published var sayStatus: String = ""
     @Published var isRunningSay: Bool = false

@@ -5,7 +5,7 @@ import Combine
 @main
 struct STTBridgeApp: App {
     @StateObject private var serverMgr = ServerManager()
-    
+
     // Check if running headless (backend-only)
     private var isHeadless: Bool {
         CommandLine.arguments.contains("--headless") ||
@@ -21,42 +21,80 @@ struct STTBridgeApp: App {
                     .hidden()
             } else {
                 ContentView(status: serverMgr.status)
+                    .environmentObject(serverMgr)
             }
         }
         .defaultSize(width: isHeadless ? 0 : 800, height: isHeadless ? 0 : 600)
+
+        Settings {
+            ServerSettingsView()
+                .environmentObject(serverMgr)
+        }
     }
 }
 
+@MainActor
 final class ServerManager: ObservableObject {
     @Published var status: String = "Starting..."
+    @Published var bindHost: String
+    @Published var port: Int
+    @Published var authToken: String
+    @Published var defaultLang: String
+    @Published var offlineOnly: Bool
+
     private var server: HTTPServer?
+    private let serverQueue = DispatchQueue(label: "sttbridge.server", qos: .userInitiated)
 
     init() {
+        let cfg = Config()
+        self.bindHost = cfg.bindHost
+        self.port = cfg.port
+        self.authToken = cfg.authToken ?? ""
+        self.defaultLang = cfg.defaultLang
+        self.offlineOnly = cfg.offlineOnly
+
         SFSpeechRecognizer.requestAuthorization { st in
             print("Speech auth: \(st)")
         }
+        startServer(config: cfg)
+    }
+
+    /// Re-reads Config from UserDefaults/env and restarts the server. The serial
+    /// `serverQueue` guarantees the new server starts only after the previous one
+    /// has unblocked from `start()`.
+    func reload() {
         let cfg = Config()
-        DispatchQueue.global(qos: .userInitiated).async {
-            let srv = HTTPServer(config: cfg)
-            self.server = srv
+        status = "Restarting on \(cfg.bindHost):\(cfg.port)…"
+        server?.stop()
+        startServer(config: cfg)
+    }
+
+    private func startServer(config: Config) {
+        let isHeadless = CommandLine.arguments.contains("--headless") ||
+                         CommandLine.arguments.contains("--no-ui")
+        serverQueue.async { [weak self] in
+            guard let self else { return }
+            let srv = HTTPServer(config: config)
+            Task { @MainActor in
+                self.server = srv
+                self.bindHost = config.bindHost
+                self.port = config.port
+                self.authToken = config.authToken ?? ""
+                self.defaultLang = config.defaultLang
+                self.offlineOnly = config.offlineOnly
+                self.status = "Server running at http://\(config.bindHost):\(config.port)"
+            }
             do {
-                let msg = "Server running at http://\(cfg.bindHost):\(cfg.port)"
-                DispatchQueue.main.async { self.status = msg }
-                
-                // Print to console for headless mode
-                if CommandLine.arguments.contains("--headless") ||
-                   CommandLine.arguments.contains("--no-ui") {
-                    print("✓ \(msg)")
+                if isHeadless {
+                    print("✓ Server running at http://\(config.bindHost):\(config.port)")
                     print("✓ Press Ctrl+C to quit")
                 }
-                
                 try srv.start()
             } catch {
                 let errMsg = "Server error: \(error)"
-                DispatchQueue.main.async { self.status = errMsg }
+                Task { @MainActor in self.status = errMsg }
                 print("✗ \(errMsg)")
             }
         }
     }
 }
-    

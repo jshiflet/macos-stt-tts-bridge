@@ -829,7 +829,7 @@ struct ContentView: View {
   </section>
   <section class="card">
     <h2>TTS</h2>
-    <div class="row"><textarea id="ttsText" rows="3">Hello Stuttgart! This is a local TTS demo.</textarea></div>
+    <div class="row"><textarea id="ttsText" rows="3">Hello World! This is a local TTS demo.</textarea></div>
     <div class="row">
       <label>Voice ID:</label><input id="voiceId" size="40" placeholder="com.apple.speech.synthesis.voice...">
       <label>Rate:</label><input id="rate" type="number" min="0.5" max="2.0" step="0.1" value="1.0">
@@ -926,7 +926,7 @@ curl --data-binary @sample.wav -H "Content-Type: audio/wav" \
 # TTS → WAV
 curl -X POST http://127.0.0.1:8787/tts \
   -H 'Content-Type: application/json' \
-  -d '{"text":"Hello Stuttgart"}' --output out.wav
+  -d '{"text":"Hello World"}' --output out.wav
 \`\`\`
 
 > **Stabile Freigaben:** App in **/Applications** kopieren und immer **dieselbe Kopie** starten.  

@@ -5,14 +5,15 @@ struct Config {
     static let defaultPort = 8787
     static let defaultLanguage = "en-US"
 
-    static let bindHostKey = "bindHost"
+    static let bindHostsKey = "bindHosts"
+    static let bindHostLegacyKey = "bindHost"   // migration source only
     static let portKey = "port"
     static let authTokenKey = "authToken"
     static let defaultLangKey = "defaultLang"
     static let offlineOnlyKey = "offlineOnly"
 
     let port: Int
-    let bindHost: String
+    let bindHosts: [String]
     let authToken: String?
     let defaultLang: String
     let offlineOnly: Bool
@@ -33,18 +34,20 @@ struct Config {
             port = Int(env["PORT"] ?? "") ?? Self.defaultPort
         }
 
-        if let cliHost = cli["bind-host"], !cliHost.isEmpty {
-            bindHost = cliHost
-        } else if let stored = defaults.string(forKey: Self.bindHostKey), !stored.isEmpty {
-            bindHost = stored
-        } else {
-            bindHost = env["BIND_HOST"] ?? Self.defaultBindHost
-        }
+        bindHosts = Self.resolveBindHosts(cli: cli, env: env, defaults: defaults)
 
         if let cliToken = cli["auth-token"] {
             authToken = cliToken.isEmpty ? nil : cliToken
-        } else if let stored = defaults.string(forKey: Self.authTokenKey), !stored.isEmpty {
-            authToken = stored
+        } else if let kcToken = KeychainAuthToken.load(), !kcToken.isEmpty {
+            authToken = kcToken
+        } else if let legacy = defaults.string(forKey: Self.authTokenKey), !legacy.isEmpty {
+            // One-shot migration from the old plaintext UserDefaults storage.
+            // Save to Keychain first; only clear UserDefaults if the save succeeded,
+            // so a Keychain failure can't lose the user's token.
+            if KeychainAuthToken.save(legacy) {
+                defaults.removeObject(forKey: Self.authTokenKey)
+            }
+            authToken = legacy
         } else {
             authToken = env["AUTH_TOKEN"]
         }
@@ -64,6 +67,55 @@ struct Config {
         } else {
             offlineOnly = (env["OFFLINE_ONLY"] ?? "false").lowercased() == "true"
         }
+    }
+
+    /// Resolves the list of bind hosts. Priority: CLI > UserDefaults array > legacy
+    /// single-string UserDefaults key (migrated to the array key) > env > default.
+    /// Always returns at least one host. Dedups; if "0.0.0.0" is in the set, it
+    /// becomes the sole entry (binding all interfaces subsumes everything else).
+    private static func resolveBindHosts(
+        cli: [String: String],
+        env: [String: String],
+        defaults: UserDefaults
+    ) -> [String] {
+        let raw: [String]
+        if let cliHost = cli["bind-host"], !cliHost.isEmpty {
+            raw = splitHostList(cliHost)
+        } else if let arr = defaults.stringArray(forKey: Self.bindHostsKey), !arr.isEmpty {
+            raw = arr
+        } else if let legacy = defaults.string(forKey: Self.bindHostLegacyKey), !legacy.isEmpty {
+            // Migrate the old single-string `bindHost` key to the array key.
+            let migrated = [legacy]
+            defaults.set(migrated, forKey: Self.bindHostsKey)
+            defaults.removeObject(forKey: Self.bindHostLegacyKey)
+            raw = migrated
+        } else if let envHost = env["BIND_HOST"], !envHost.isEmpty {
+            raw = splitHostList(envHost)
+        } else {
+            raw = [Self.defaultBindHost]
+        }
+        return normalizeHosts(raw)
+    }
+
+    /// Splits a comma-separated host list, trims whitespace, drops empties.
+    private static func splitHostList(_ s: String) -> [String] {
+        s.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Dedups (preserves order), then collapses to `["0.0.0.0"]` if present, and
+    /// guarantees at least one entry (falling back to the default bind host).
+    static func normalizeHosts(_ hosts: [String]) -> [String] {
+        var seen = Set<String>()
+        var deduped = hosts.filter { seen.insert($0).inserted }
+        if deduped.contains("0.0.0.0") {
+            deduped = ["0.0.0.0"]
+        }
+        if deduped.isEmpty {
+            deduped = [Self.defaultBindHost]
+        }
+        return deduped
     }
 
     /// Parses `--key value` and `--key=value`. Bare `--flag` becomes `"true"`.

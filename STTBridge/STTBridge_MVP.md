@@ -64,7 +64,7 @@ struct Config {
         port = Int(env["PORT"] ?? "") ?? 8787
         bindHost = env["BIND_HOST"] ?? "127.0.0.1"
         authToken = env["AUTH_TOKEN"]
-        defaultLang = env["DEFAULT_LANG"] ?? "de-DE"
+        defaultLang = env["DEFAULT_LANG"] ?? "en-US"
         offlineOnly = (env["OFFLINE_ONLY"] ?? "false").lowercased() == "true"
     }
 }
@@ -817,7 +817,7 @@ struct ContentView: View {
   <section class="card">
     <h2>WebSocket STT</h2>
     <div class="row">
-      <label>Language:</label><input id="lang" value="de-DE">
+      <label>Language:</label><input id="lang" value="en-US">
       <label><input id="offline" type="checkbox"> offline</label>
       <label><input id="partials" type="checkbox" checked> Partials</label>
     </div>
@@ -851,7 +851,7 @@ let ws, mediaStream;
 const log = (m)=>{const el=document.getElementById('sttOut'); el.textContent+=m+"\n"; el.scrollTop=el.scrollHeight;};
 const start = async ()=>{
   document.getElementById('sttOut').textContent='';
-  const lang = document.getElementById('lang').value || 'de-DE';
+  const lang = document.getElementById('lang').value || 'en-US';
   const offline = document.getElementById('offline').checked;
   const partials = document.getElementById('partials').checked;
   mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -921,7 +921,7 @@ curl http://127.0.0.1:8787/healthz
 
 # STT mit WAV
 curl --data-binary @sample.wav -H "Content-Type: audio/wav" \
-  "http://127.0.0.1:8787/stt?lang=de-DE&offline=true"
+  "http://127.0.0.1:8787/stt?lang=en-US&offline=true"
 
 # TTS → WAV
 curl -X POST http://127.0.0.1:8787/tts \

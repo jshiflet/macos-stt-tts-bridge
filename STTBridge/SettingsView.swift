@@ -16,6 +16,35 @@ struct ServerSettingsView: View {
     }
 }
 
+// MARK: - Shared warning banner
+
+/// Yellow informational banner used by both settings tabs to flag security-relevant
+/// configuration (network-reachable binds, missing auth token, etc.).
+private struct SettingsWarningBanner: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+                .imageScale(.large)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.callout).bold()
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.yellow.opacity(0.15)))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.yellow.opacity(0.6), lineWidth: 1))
+    }
+}
+
 // MARK: - Server tab
 
 private struct ServerSettingsTab: View {
@@ -31,21 +60,21 @@ private struct ServerSettingsTab: View {
     var body: some View {
         Form {
             Section {
-                Picker("Bind address:", selection: hostBinding) {
-                    Text("All interfaces (0.0.0.0)").tag(Self.allInterfaces)
-                    Text("Localhost only (127.0.0.1)").tag(Self.localhost)
-                    if !interfaces.isEmpty {
-                        Divider()
-                        ForEach(interfaces) { iface in
-                            Text("\(iface.address) — \(iface.name)").tag(iface.address)
-                        }
-                    }
-                    if !selectedHostIsKnown {
-                        Divider()
-                        Text("\(serverMgr.bindHost) (current)").tag(serverMgr.bindHost)
-                    }
+                if let warning = bindWarning {
+                    SettingsWarningBanner(title: warning.title, detail: warning.detail)
                 }
-                .pickerStyle(.menu)
+
+                Toggle("All interfaces (0.0.0.0)", isOn: bindBinding(for: Self.allInterfaces))
+                Toggle("Localhost only (127.0.0.1)", isOn: bindBinding(for: Self.localhost))
+                    .disabled(serverMgr.bindHosts.contains(Self.allInterfaces))
+                ForEach(interfaces) { iface in
+                    Toggle("\(iface.address) — \(iface.name)", isOn: bindBinding(for: iface.address))
+                        .disabled(serverMgr.bindHosts.contains(Self.allInterfaces))
+                }
+                ForEach(customHosts, id: \.self) { host in
+                    Toggle("\(host) (custom)", isOn: bindBinding(for: host))
+                        .disabled(serverMgr.bindHosts.contains(Self.allInterfaces))
+                }
 
                 HStack {
                     TextField("Port:", text: $portText)
@@ -62,7 +91,7 @@ private struct ServerSettingsTab: View {
             } header: {
                 Text("Network").font(.headline)
             } footer: {
-                Text("Choose 0.0.0.0 to accept connections from any network interface, 127.0.0.1 to limit the server to this Mac, or pick a specific address to bind to a single interface.")
+                Text("Select one or more addresses to bind to. 0.0.0.0 covers all interfaces and overrides every other selection; selecting any other address disables it. At least one address is always selected — unchecking the last one reverts to 127.0.0.1.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -102,12 +131,29 @@ private struct ServerSettingsTab: View {
 
     // MARK: Bindings
 
-    private var hostBinding: Binding<String> {
+    /// Per-address toggle binding. Enforces:
+    ///   • Selecting 0.0.0.0 clears every other address (subsumed).
+    ///   • Selecting a specific address clears 0.0.0.0.
+    ///   • Unchecking the last address falls back to 127.0.0.1 so the list is never empty.
+    private func bindBinding(for address: String) -> Binding<Bool> {
         Binding(
-            get: { serverMgr.bindHost },
-            set: { new in
-                guard new != serverMgr.bindHost else { return }
-                UserDefaults.standard.set(new, forKey: Config.bindHostKey)
+            get: { serverMgr.bindHosts.contains(address) },
+            set: { isOn in
+                var hosts = serverMgr.bindHosts
+                if isOn {
+                    if address == Self.allInterfaces {
+                        hosts = [Self.allInterfaces]
+                    } else {
+                        hosts.removeAll { $0 == Self.allInterfaces }
+                        if !hosts.contains(address) { hosts.append(address) }
+                    }
+                } else {
+                    hosts.removeAll { $0 == address }
+                    if hosts.isEmpty { hosts = [Self.localhost] }
+                }
+                let normalized = Config.normalizeHosts(hosts)
+                guard normalized != serverMgr.bindHosts else { return }
+                UserDefaults.standard.set(normalized, forKey: Config.bindHostsKey)
                 serverMgr.reload()
             }
         )
@@ -146,9 +192,32 @@ private struct ServerSettingsTab: View {
 
     // MARK: Helpers
 
-    private var selectedHostIsKnown: Bool {
-        if serverMgr.bindHost == Self.allInterfaces || serverMgr.bindHost == Self.localhost { return true }
-        return interfaces.contains { $0.address == serverMgr.bindHost }
+    /// Any host the user has selected that isn't one of the well-known options
+    /// (`0.0.0.0` / `127.0.0.1`) and isn't a detected NIC. These get rendered with
+    /// a `(custom)` suffix so a CLI-supplied address still appears in the list.
+    private var customHosts: [String] {
+        let known: Set<String> = Set([Self.allInterfaces, Self.localhost] + interfaces.map(\.address))
+        return serverMgr.bindHosts.filter { !known.contains($0) }
+    }
+
+    /// Returns banner copy whenever the bind set contains any non-loopback host.
+    /// Copy depends on whether a token is already configured: if so, this is just
+    /// an informational reminder; if not, it's an actionable prompt to go set one.
+    private var bindWarning: (title: String, detail: String)? {
+        let nonLoopback = HTTPServer.nonLoopbackHosts(serverMgr.bindHosts)
+        guard !nonLoopback.isEmpty else { return nil }
+        let hostList = nonLoopback.joined(separator: ", ")
+        if serverMgr.authToken.isEmpty {
+            return (
+                title: "Authentication will be required",
+                detail: "\(hostList) accepts connections from the network. Set an auth token on the Authentication tab — until you do, all requests to /stt, /tts, and /say are rejected with 401."
+            )
+        } else {
+            return (
+                title: "Network-reachable bind — authentication enforced",
+                detail: "\(hostList) accepts connections from the network. The configured auth token is required for /stt, /tts, /say, and the STT WebSocket."
+            )
+        }
     }
 
     private var displayLocales: [String] {
@@ -180,13 +249,7 @@ private struct AuthSettingsTab: View {
     var body: some View {
         Form {
             Section {
-                if serverMgr.authToken.isEmpty {
-                    Text("No auth token is set — all requests are accepted.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Clients must supply this token to call /stt, /tts, /say, or open the STT WebSocket.")
-                        .foregroundStyle(.secondary)
-                }
+                authStatusView
 
                 HStack {
                     Group {
@@ -249,7 +312,7 @@ private struct AuthSettingsTab: View {
                         .font(.system(.caption, design: .monospaced))
                     Text("• WebSocket: ?token=<token> in the URL")
                         .font(.system(.caption, design: .monospaced))
-                    Text("An empty token disables authentication.")
+                    Text("An empty token disables authentication, but only when every bound address is loopback. Any non-loopback bind requires a token.")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -260,13 +323,40 @@ private struct AuthSettingsTab: View {
         .onChange(of: serverMgr.authToken) { _, new in tokenText = new }
     }
 
+    @ViewBuilder
+    private var authStatusView: some View {
+        if let warning = authWarning() {
+            SettingsWarningBanner(title: warning.title, detail: warning.detail)
+        } else {
+            Text("Clients must supply this token to call /stt, /tts, /say, or open the STT WebSocket.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func authWarning() -> (title: String, detail: String)? {
+        guard serverMgr.authToken.isEmpty else { return nil }
+        let nonLoopback = HTTPServer.nonLoopbackHosts(serverMgr.bindHosts)
+        if nonLoopback.isEmpty {
+            return (
+                title: "No auth token is set",
+                detail: "Any website you visit in your browser could issue requests to this local server. Click Generate below to set a token."
+            )
+        }
+        return (
+            title: "Authentication required for \(nonLoopback.joined(separator: ", "))",
+            detail: "These bind addresses are reachable from the network. All requests to /stt, /tts, and /say are rejected with 401 until a token is set."
+        )
+    }
+
+
+
     private func applyToken() {
         let trimmed = tokenText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed != serverMgr.authToken else { return }
         if trimmed.isEmpty {
-            UserDefaults.standard.removeObject(forKey: Config.authTokenKey)
+            KeychainAuthToken.delete()
         } else {
-            UserDefaults.standard.set(trimmed, forKey: Config.authTokenKey)
+            KeychainAuthToken.save(trimmed)
         }
         tokenText = trimmed
         serverMgr.reload()

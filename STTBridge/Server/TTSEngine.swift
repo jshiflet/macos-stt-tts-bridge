@@ -6,13 +6,33 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
     private let synth = AVSpeechSynthesizer()
     private let resampler = AudioResampler()
 
+    /// Sentinel voice identifier that routes TTS through the `say` CLI instead
+    /// of AVSpeechSynthesizer. Selecting it makes /tts behave like /say.
+    static let siriVoiceIdentifier = "Siri"
+
     func listVoices() -> [VoiceInfo] {
-        AVSpeechSynthesisVoice.speechVoices().map { v in
+        var voices = AVSpeechSynthesisVoice.speechVoices().map { v in
             VoiceInfo(name: v.name, identifier: v.identifier, language: v.language, quality: v.quality.rawValue)
         }
+        let siri = VoiceInfo(
+            name: "Siri",
+            identifier: Self.siriVoiceIdentifier,
+            language: "system",
+            quality: AVSpeechSynthesisVoiceQuality.enhanced.rawValue
+        )
+        voices.insert(siri, at: 0)
+        return voices
     }
 
     func speakLocal(_ text: String, voiceId: String?, rate: Double?, pitch: Double?) {
+        if voiceId == Self.siriVoiceIdentifier {
+            // Route through `say` CLI to match /say's exact behavior. Fire-and-forget,
+            // mirroring AVSpeechSynthesizer.speak(_:).
+            Task { [weak self] in
+                try? await self?.speakWithSay(text)
+            }
+            return
+        }
         let u = makeUtterance(text: text, voiceId: voiceId, rate: rate, pitch: pitch)
         synth.speak(u)
     }
@@ -21,10 +41,10 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
         try await runSay(text: text, outputURL: nil)
     }
 
-    func synthesizeWithSayToM4A(_ text: String) async throws -> Data {
+    func synthesizeWithSayToWAV(_ text: String) async throws -> Data {
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("m4a")
+            .appendingPathExtension("wav")
         defer {
             try? FileManager.default.removeItem(at: outputURL)
         }
@@ -33,7 +53,7 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
         do {
             return try Data(contentsOf: outputURL)
         } catch {
-            throw AudioError.io("Unable to read synthesized m4a file")
+            throw AudioError.io("Unable to read synthesized WAV file")
         }
     }
 
@@ -52,8 +72,8 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
         if let id = voiceId, !id.isEmpty, let v = AVSpeechSynthesisVoice(identifier: id) {
             u.voice = v
         } else {
-            // 2) Preferred: Anna (de-DE), highest quality
-            let candidates = AVSpeechSynthesisVoice.speechVoices().filter { $0.language == "de-DE" }
+            // 2) Preferred: Anna (en-US), highest quality
+            let candidates = AVSpeechSynthesisVoice.speechVoices().filter { $0.language == "en-US" }
             if let annaBest = candidates
                 .filter({ $0.name == "Anna" })
                 .sorted(by: { $0.quality.rawValue > $1.quality.rawValue })
@@ -88,6 +108,11 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
 
     /// Synthesize → 16kHz mono PCM16 WAV
     func synthesizeToWAV(text: String, voiceId: String?, rate: Double?, pitch: Double?) async throws -> Data {
+        if voiceId == Self.siriVoiceIdentifier {
+            // The "Siri" voice routes through the `say` CLI, producing the same
+            // WAV output that /say returns.
+            return try await synthesizeWithSayToWAV(text)
+        }
         let utterance = makeUtterance(text: text, voiceId: voiceId, rate: rate, pitch: pitch)
         var collected: [AVAudioPCMBuffer] = []
         var fmt: AVAudioFormat?
@@ -145,11 +170,26 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
         return wav
     }
 
+    /// Caps how many `say` subprocesses can be in flight at once across the
+    /// whole app. Prevents a flood of requests from spawning unbounded children.
+    private static let sayLimiter = SayConcurrencyLimiter(maxConcurrent: 4)
+
     private func runSay(text: String, outputURL: URL?) async throws {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw APIError.badRequest("Text is required")
         }
 
+        await Self.sayLimiter.acquire()
+        do {
+            try await launchSayProcess(text: text, outputURL: outputURL)
+            await Self.sayLimiter.release()
+        } catch {
+            await Self.sayLimiter.release()
+            throw error
+        }
+    }
+
+    private func launchSayProcess(text: String, outputURL: URL?) async throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
 
@@ -158,10 +198,14 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
             try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             arguments += [
                 "-o", outputURL.path,
-                "--file-format=m4af",
-                "--data-format=aac"
+                "--file-format=WAVE",
+                "--data-format=LEI16@44100"
             ]
         }
+        // End-of-options terminator: every argv after `--` is treated as a
+        // positional argument, so a caller-supplied `text` that begins with `-`
+        // or `--foo=bar` cannot be parsed as a `say` option.
+        arguments.append("--")
         arguments.append(text)
         process.arguments = arguments
 
@@ -190,4 +234,38 @@ final class TTSEngine: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
+}
+
+/// Counting semaphore (actor-isolated) limiting how many `say` subprocesses can
+/// run concurrently. `acquire()` suspends until a slot is free; `release()`
+/// hands the slot to the next waiter, or just frees it.
+actor SayConcurrencyLimiter {
+    private let maxConcurrent: Int
+    private var inFlight = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(maxConcurrent: Int) {
+        self.maxConcurrent = maxConcurrent
+    }
+
+    func acquire() async {
+        if inFlight < maxConcurrent {
+            inFlight += 1
+            return
+        }
+        await withCheckedContinuation { cont in
+            waiters.append(cont)
+        }
+        // Resumed by release(): the slot was handed to us, so inFlight is
+        // already accounted for and must not be incremented again.
+    }
+
+    func release() {
+        if !waiters.isEmpty {
+            let next = waiters.removeFirst()
+            next.resume()
+        } else {
+            inFlight -= 1
+        }
+    }
 }

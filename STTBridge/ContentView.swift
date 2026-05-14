@@ -5,8 +5,8 @@ import Combine
 import UniformTypeIdentifiers
 
 struct SayAudioDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.mpeg4Audio] }
-    static var writableContentTypes: [UTType] { [.mpeg4Audio] }
+    static var readableContentTypes: [UTType] { [.wav] }
+    static var writableContentTypes: [UTType] { [.wav] }
 
     let data: Data
 
@@ -95,15 +95,15 @@ class AppViewModel: ObservableObject {
         }
 
         isRunningSay = true
-        sayStatus = sayOutputToFile ? "Generating m4a file..." : "Speaking through system audio..."
+        sayStatus = sayOutputToFile ? "Generating WAV file..." : "Speaking through system audio..."
 
         Task {
             do {
                 if sayOutputToFile {
-                    let data = try await ttsEngine.synthesizeWithSayToM4A(text)
+                    let data = try await ttsEngine.synthesizeWithSayToWAV(text)
                     sayExportDocument = SayAudioDocument(data: data)
                     sayDefaultFilename = defaultSayFilename(for: text)
-                    sayStatus = "Choose where to save the m4a file."
+                    sayStatus = "Choose where to save the WAV file."
                     isShowingSayExporter = true
                 } else {
                     try await ttsEngine.speakWithSay(text)
@@ -170,7 +170,7 @@ class AppViewModel: ObservableObject {
 
     private func setupAndStartSTT() {
         do {
-            sttSession = try STTStreamSession(lang: "de-DE", requiresOnDevice: true)
+            sttSession = try STTStreamSession(lang: "en-US", requiresOnDevice: true)
             sttSession?.onPartial = { [weak self] text in self?.sttText = text }
             sttSession?.onFinal = { [weak self] text, _ in self?.sttText = text }
             sttSession?.onError = { [weak self] error in
@@ -267,10 +267,10 @@ struct ContentView: View {
                 .frame(height: 80)
                 .border(Color.gray.opacity(0.5), width: 1)
 
-            Toggle("Output to m4a file", isOn: $viewModel.sayOutputToFile)
+            Toggle("Output to WAV file", isOn: $viewModel.sayOutputToFile)
 
             HStack {
-                Button(viewModel.sayOutputToFile ? "Save m4a…" : "Run say", action: viewModel.runSay)
+                Button(viewModel.sayOutputToFile ? "Save WAV…" : "Run say", action: viewModel.runSay)
                     .disabled(viewModel.isRunningSay)
                 if !viewModel.sayStatus.isEmpty {
                     Text(viewModel.sayStatus)
@@ -285,7 +285,7 @@ struct ContentView: View {
         .fileExporter(
             isPresented: $viewModel.isShowingSayExporter,
             document: viewModel.sayExportDocument,
-            contentTypes: [.mpeg4Audio],
+            contentTypes: [.wav],
             defaultFilename: viewModel.sayDefaultFilename,
             onCompletion: viewModel.handleSayExport,
             onCancellation: viewModel.cancelSayExport

@@ -2,7 +2,7 @@ let ws, mediaStream;
 const log = (m)=>{const el=document.getElementById('sttOut'); el.textContent+=m+"\n"; el.scrollTop=el.scrollHeight;};
 const start = async ()=>{
   document.getElementById('sttOut').textContent='';
-  const lang = document.getElementById('lang').value || 'de-DE';
+  const lang = document.getElementById('lang').value || 'en-US';
   const offline = document.getElementById('offline').checked;
   const partials = document.getElementById('partials').checked;
   mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });

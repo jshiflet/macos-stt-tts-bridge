@@ -18,16 +18,48 @@ final class HTTPServer {
     private let cfg: Config
     private let stt: STTEngine
     private let tts = TTSEngine()
-    private var channel: Channel?
+    private var channels: [Channel] = []
+
+    /// True when a host string is one of the loopback aliases.
+    static func isLoopbackBind(_ host: String) -> Bool {
+        let h = host.lowercased()
+        return h == "127.0.0.1" || h == "::1" || h == "localhost"
+    }
+
+    /// True when every bound host is loopback. If false, the server is reachable
+    /// from the network on at least one of its addresses.
+    static func allLoopback(_ hosts: [String]) -> Bool {
+        hosts.allSatisfy { isLoopbackBind($0) }
+    }
+
+    /// Subset of bound hosts that are non-loopback (for surfacing in error messages
+    /// and warnings).
+    static func nonLoopbackHosts(_ hosts: [String]) -> [String] {
+        hosts.filter { !isLoopbackBind($0) }
+    }
+
+    /// Single source of truth for "is this caller allowed to use protected endpoints?".
+    ///   - If an auth token is configured, the caller must supply it.
+    ///   - If no token is configured and any bound host is non-loopback, refuse.
+    ///   - If no token is configured and every bound host is loopback, allow (dev mode).
+    static func authError(providedToken: String?, config: Config) -> APIError? {
+        if let required = config.authToken, !required.isEmpty {
+            return providedToken == required ? nil : .unauthorized("Missing or invalid token.")
+        }
+        if !allLoopback(config.bindHosts) {
+            return .unauthorized("Authentication is required when the server is not bound exclusively to loopback. Set an auth token in Settings.")
+        }
+        return nil
+    }
 
     init(config: Config) {
         self.cfg = config
         self.stt = STTEngine(config: config)
     }
 
-    /// Closes the listening channel, which causes `start()` to return.
+    /// Closes all listening channels, which causes `start()` to return.
     func stop() {
-        channel?.close(promise: nil)
+        for ch in channels { ch.close(promise: nil) }
     }
 
     func start() throws {
@@ -51,10 +83,27 @@ final class HTTPServer {
             .childChannelOption(ChannelOptions.maxMessagesPerRead, value: 16)
             .childChannelOption(ChannelOptions.recvAllocator, value: AdaptiveRecvByteBufferAllocator())
 
-        let ch = try bootstrap.bind(host: cfg.bindHost, port: cfg.port).wait()
-        self.channel = ch
-        print("🔊 STTBridge running at http://\(cfg.bindHost):\(cfg.port)")
-        try ch.closeFuture.wait()
+        // Bind every requested host. If one fails, close the ones already bound
+        // and surface the error so the caller can report it without leaking sockets.
+        var bound: [Channel] = []
+        do {
+            for host in cfg.bindHosts {
+                let ch = try bootstrap.bind(host: host, port: cfg.port).wait()
+                bound.append(ch)
+            }
+        } catch {
+            for ch in bound { ch.close(promise: nil) }
+            try? group.syncShutdownGracefully()
+            throw error
+        }
+        self.channels = bound
+        let urls = cfg.bindHosts.map { "http://\($0):\(cfg.port)" }.joined(separator: ", ")
+        print("🔊 STTBridge running at \(urls)")
+
+        // Block until every bound channel is closed (stop() closes them all).
+        for ch in bound {
+            try ch.closeFuture.wait()
+        }
         try? group.syncShutdownGracefully()
     }
 
@@ -83,15 +132,13 @@ final class HTTPServer {
                 }
             }
         }
-        if let required = cfg.authToken {
-            let provided = token ?? request.headers.first(name: "Authorization")?.replacingOccurrences(of: "Bearer ", with: "")
-            if provided != required {
-                var buf = channel.allocator.buffer(capacity: 0)
-                buf.writeString("{\"type\":\"error\",\"error\":\"unauthorized\"}")
-                let frame = WebSocketFrame(fin: true, opcode: .text, data: buf)
-                channel.writeAndFlush(frame, promise: nil)
-                return channel.close()
-            }
+        let provided = token ?? request.headers.first(name: "Authorization")?.replacingOccurrences(of: "Bearer ", with: "")
+        if HTTPServer.authError(providedToken: provided, config: cfg) != nil {
+            var buf = channel.allocator.buffer(capacity: 0)
+            buf.writeString("{\"type\":\"error\",\"error\":\"unauthorized\"}")
+            let frame = WebSocketFrame(fin: true, opcode: .text, data: buf)
+            channel.writeAndFlush(frame, promise: nil)
+            return channel.close()
         }
 
         do {
@@ -119,6 +166,10 @@ final class HTTPServer {
     final class HTTPHandler: ChannelInboundHandler {
         typealias InboundIn = HTTPServerRequestPart
         typealias OutboundOut = HTTPServerResponsePart
+
+        /// Caps the `text` size accepted by /say and /tts. ~10 minutes of
+        /// continuous speech and bounds CPU/memory cost of any single request.
+        static let maxSpeechTextLength = 8192
 
         private let server: HTTPServer
         private let upgrader: NIOWebSocketServerUpgrader
@@ -152,10 +203,8 @@ final class HTTPServer {
         }
 
         private func verifyAuth(_ head: HTTPRequestHead) -> APIError? {
-            guard let required = server.cfg.authToken else { return nil }
             let provided = head.headers.first(name: "Authorization")?.replacingOccurrences(of: "Bearer ", with: "")
-            if provided != required { return .unauthorized("Missing or invalid token.") }
-            return nil
+            return HTTPServer.authError(providedToken: provided, config: server.cfg)
         }
 
         private func writeHeadBodyEnd(_ context: ChannelHandlerContext, status: HTTPResponseStatus, headers: HTTPHeaders, body: ByteBuffer?) {
@@ -208,6 +257,10 @@ final class HTTPServer {
                                 pitch: Double?,
                                 speakLocal: Bool,
                                 extra: HTTPHeaders) {
+            if text.utf8.count > Self.maxSpeechTextLength {
+                writeError(context, .badRequest("text exceeds \(Self.maxSpeechTextLength) byte limit"), extra: extra)
+                return
+            }
             let eventLoop = context.eventLoop
             let loopBoundContext = NIOLoopBound(context, eventLoop: eventLoop)
             if speakLocal {
@@ -234,6 +287,10 @@ final class HTTPServer {
                                 text: String,
                                 speakLocal: Bool,
                                 extra: HTTPHeaders) {
+            if text.utf8.count > Self.maxSpeechTextLength {
+                writeError(context, .badRequest("text exceeds \(Self.maxSpeechTextLength) byte limit"), extra: extra)
+                return
+            }
             let eventLoop = context.eventLoop
             let loopBoundContext = NIOLoopBound(context, eventLoop: eventLoop)
             if speakLocal {
@@ -248,13 +305,13 @@ final class HTTPServer {
                     }
                 }
             } else {
-                let attach = Self.attachmentHeader(text: text, ext: "m4a")
+                let attach = Self.attachmentHeader(text: text, ext: "wav")
                 Task {
                     do {
-                        let m4a = try await self.server.tts.synthesizeWithSayToM4A(text)
+                        let wav = try await self.server.tts.synthesizeWithSayToWAV(text)
                         var responseHeaders = extra
                         responseHeaders.add(name: attach.name, value: attach.value)
-                        eventLoop.execute { self.writeBytes(loopBoundContext.value, data: m4a, contentType: "audio/mp4", extra: responseHeaders) }
+                        eventLoop.execute { self.writeBytes(loopBoundContext.value, data: wav, contentType: "audio/wav", extra: responseHeaders) }
                     } catch let error as APIError {
                         eventLoop.execute { self.writeError(loopBoundContext.value, error, extra: extra) }
                     } catch {

@@ -36,7 +36,7 @@ struct STTBridgeApp: App {
 @MainActor
 final class ServerManager: ObservableObject {
     @Published var status: String = "Starting..."
-    @Published var bindHost: String
+    @Published var bindHosts: [String]
     @Published var port: Int
     @Published var authToken: String
     @Published var defaultLang: String
@@ -47,7 +47,7 @@ final class ServerManager: ObservableObject {
 
     init() {
         let cfg = Config()
-        self.bindHost = cfg.bindHost
+        self.bindHosts = cfg.bindHosts
         self.port = cfg.port
         self.authToken = cfg.authToken ?? ""
         self.defaultLang = cfg.defaultLang
@@ -64,7 +64,7 @@ final class ServerManager: ObservableObject {
     /// has unblocked from `start()`.
     func reload() {
         let cfg = Config()
-        status = "Restarting on \(cfg.bindHost):\(cfg.port)…"
+        status = "Restarting on \(Self.urlList(hosts: cfg.bindHosts, port: cfg.port))…"
         server?.stop()
         startServer(config: cfg)
     }
@@ -77,16 +77,16 @@ final class ServerManager: ObservableObject {
             let srv = HTTPServer(config: config)
             Task { @MainActor in
                 self.server = srv
-                self.bindHost = config.bindHost
+                self.bindHosts = config.bindHosts
                 self.port = config.port
                 self.authToken = config.authToken ?? ""
                 self.defaultLang = config.defaultLang
                 self.offlineOnly = config.offlineOnly
-                self.status = "Server running at http://\(config.bindHost):\(config.port)"
+                self.status = "Server running at \(Self.urlList(hosts: config.bindHosts, port: config.port))"
             }
             do {
                 if isHeadless {
-                    print("✓ Server running at http://\(config.bindHost):\(config.port)")
+                    print("✓ Server running at \(Self.urlList(hosts: config.bindHosts, port: config.port))")
                     print("✓ Press Ctrl+C to quit")
                 }
                 try srv.start()
@@ -96,5 +96,9 @@ final class ServerManager: ObservableObject {
                 print("✗ \(errMsg)")
             }
         }
+    }
+
+    nonisolated private static func urlList(hosts: [String], port: Int) -> String {
+        hosts.map { "http://\($0):\(port)" }.joined(separator: ", ")
     }
 }

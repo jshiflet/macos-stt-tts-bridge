@@ -4,7 +4,17 @@ import Combine
 
 @main
 struct STTBridgeApp: App {
-    @StateObject private var serverMgr = ServerManager()
+    @StateObject private var serverMgr: ServerManager
+
+    init() {
+        // One-shot CLI cert imports run before anything else and exit the
+        // process when done, so scripted certificate rotation never spins up
+        // the HTTP server or any UI.
+        if CLICertImporter.shouldHandle() {
+            CLICertImporter.executeAndExit()
+        }
+        _serverMgr = StateObject(wrappedValue: ServerManager())
+    }
 
     // Check if running headless (backend-only)
     private var isHeadless: Bool {
@@ -41,17 +51,35 @@ final class ServerManager: ObservableObject {
     @Published var authToken: String
     @Published var defaultLang: String
     @Published var offlineOnly: Bool
+    @Published var tlsEnabled: Bool
+    @Published var tlsCertFormat: TLSCertificateFormat
+    @Published var tlsMinVersion: TLSVersionPref
+    @Published var tlsMaxVersion: TLSVersionPref
+    @Published var tlsCustomCiphers: [String]?
+    @Published var httpRedirectPort: Int
 
     private var server: HTTPServer?
     private let serverQueue = DispatchQueue(label: "sttbridge.server", qos: .userInitiated)
 
     init() {
+        // In headless mode print() is block-buffered (stdout is a pipe/file),
+        // so server errors wouldn't surface until the buffer fills. Force
+        // unbuffered stdout so diagnostic output is visible immediately.
+        if CommandLine.arguments.contains("--headless") || CommandLine.arguments.contains("--no-ui") {
+            setbuf(stdout, nil)
+        }
         let cfg = Config()
         self.bindHosts = cfg.bindHosts
         self.port = cfg.port
         self.authToken = cfg.authToken ?? ""
         self.defaultLang = cfg.defaultLang
         self.offlineOnly = cfg.offlineOnly
+        self.tlsEnabled = cfg.tlsEnabled
+        self.tlsCertFormat = cfg.tlsCertFormat
+        self.tlsMinVersion = cfg.tlsMinVersion
+        self.tlsMaxVersion = cfg.tlsMaxVersion
+        self.tlsCustomCiphers = cfg.tlsCustomCiphers
+        self.httpRedirectPort = cfg.httpRedirectPort
 
         SFSpeechRecognizer.requestAuthorization { st in
             print("Speech auth: \(st)")
@@ -64,7 +92,7 @@ final class ServerManager: ObservableObject {
     /// has unblocked from `start()`.
     func reload() {
         let cfg = Config()
-        status = "Restarting on \(Self.urlList(hosts: cfg.bindHosts, port: cfg.port))…"
+        status = "Restarting on \(Self.urlList(hosts: cfg.bindHosts, port: cfg.port, tls: cfg.tlsEnabled))…"
         server?.stop()
         startServer(config: cfg)
     }
@@ -82,11 +110,17 @@ final class ServerManager: ObservableObject {
                 self.authToken = config.authToken ?? ""
                 self.defaultLang = config.defaultLang
                 self.offlineOnly = config.offlineOnly
-                self.status = "Server running at \(Self.urlList(hosts: config.bindHosts, port: config.port))"
+                self.tlsEnabled = config.tlsEnabled
+                self.tlsCertFormat = config.tlsCertFormat
+                self.tlsMinVersion = config.tlsMinVersion
+                self.tlsMaxVersion = config.tlsMaxVersion
+                self.tlsCustomCiphers = config.tlsCustomCiphers
+                self.httpRedirectPort = config.httpRedirectPort
+                self.status = "Server running at \(Self.urlList(hosts: config.bindHosts, port: config.port, tls: config.tlsEnabled))"
             }
             do {
                 if isHeadless {
-                    print("✓ Server running at \(Self.urlList(hosts: config.bindHosts, port: config.port))")
+                    print("✓ Server running at \(Self.urlList(hosts: config.bindHosts, port: config.port, tls: config.tlsEnabled))")
                     print("✓ Press Ctrl+C to quit")
                 }
                 try srv.start()
@@ -98,7 +132,8 @@ final class ServerManager: ObservableObject {
         }
     }
 
-    nonisolated private static func urlList(hosts: [String], port: Int) -> String {
-        hosts.map { "http://\($0):\(port)" }.joined(separator: ", ")
+    nonisolated private static func urlList(hosts: [String], port: Int, tls: Bool) -> String {
+        let scheme = tls ? "https" : "http"
+        return hosts.map { "\(scheme)://\($0):\(port)" }.joined(separator: ", ")
     }
 }

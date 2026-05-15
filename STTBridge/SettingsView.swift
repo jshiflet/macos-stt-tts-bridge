@@ -2,6 +2,7 @@ import SwiftUI
 import Speech
 import Security
 import AppKit
+import UniformTypeIdentifiers
 
 struct ServerSettingsView: View {
     var body: some View {
@@ -10,8 +11,10 @@ struct ServerSettingsView: View {
                 .tabItem { Label("Server", systemImage: "network") }
             AuthSettingsTab()
                 .tabItem { Label("Authentication", systemImage: "key.fill") }
+            TLSSettingsTab()
+                .tabItem { Label("TLS", systemImage: "lock.shield") }
         }
-        .frame(width: 540, height: 400)
+        .frame(width: 580, height: 520)
         .padding(.top, 8)
     }
 }
@@ -76,17 +79,20 @@ private struct ServerSettingsTab: View {
                         .disabled(serverMgr.bindHosts.contains(Self.allInterfaces))
                 }
 
+                LabeledContent("Port:") {
+                    HStack(spacing: 6) {
+                        TextField("", text: $portText)
+                            .frame(width: 80)
+                            .multilineTextAlignment(.trailing)
+                        Button("Set Port") { applyPort() }
+                            .disabled(!portTextIsValidChange)
+                    }
+                }
                 HStack {
-                    TextField("Port:", text: $portText)
-                        .frame(width: 100)
-                        .onSubmit { applyPort() }
-                    Text("Press Return to apply")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
                     Button("Refresh interfaces") {
                         interfaces = NetworkInterfaces.activeIPv4Addresses()
                     }
+                    Spacer()
                 }
             } header: {
                 Text("Network").font(.headline)
@@ -198,6 +204,13 @@ private struct ServerSettingsTab: View {
     private var customHosts: [String] {
         let known: Set<String> = Set([Self.allInterfaces, Self.localhost] + interfaces.map(\.address))
         return serverMgr.bindHosts.filter { !known.contains($0) }
+    }
+
+    /// True when the Port field holds a valid port number different from the
+    /// current one — enables the "Set Port" button.
+    private var portTextIsValidChange: Bool {
+        guard let p = Int(portText), p > 0, p < 65536 else { return false }
+        return p != serverMgr.port
     }
 
     /// Returns banner copy whenever the bind set contains any non-loopback host.
@@ -373,3 +386,490 @@ private struct AuthSettingsTab: View {
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 }
+// MARK: - TLS tab
+
+private struct TLSSettingsTab: View {
+    @EnvironmentObject var serverMgr: ServerManager
+
+    @State private var passwordText: String = ""
+    @State private var revealPassword: Bool = false
+    @State private var testResult: TestResult?
+    @State private var p12Present: Bool = CertificateStore.hasPKCS12()
+    @State private var pemCertPresent: Bool = CertificateStore.hasPEMCertificate()
+    @State private var pemKeyPresent: Bool = CertificateStore.hasPEMKey()
+    @State private var redirectPortText: String = ""
+
+    private var certComplete: Bool {
+        CertificateStore.isComplete(format: serverMgr.tlsCertFormat)
+    }
+
+    private func refreshCertState() {
+        p12Present = CertificateStore.hasPKCS12()
+        pemCertPresent = CertificateStore.hasPEMCertificate()
+        pemKeyPresent = CertificateStore.hasPEMKey()
+    }
+
+    private enum TestResult {
+        case success(CertificateInfo)
+        case failure(String)
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Enable HTTPS", isOn: tlsEnabledBinding)
+                if serverMgr.tlsEnabled && !certComplete {
+                    SettingsWarningBanner(
+                        title: "HTTPS enabled but certificate is incomplete",
+                        detail: "The server will fail to start until the required certificate files are imported below."
+                    )
+                }
+            } header: {
+                Text("HTTPS").font(.headline)
+            } footer: {
+                Text("When enabled, every bound address listens with TLS. URLs become https:// and the WebSocket endpoint becomes wss://.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Picker("Format:", selection: certFormatBinding) {
+                    ForEach(TLSCertificateFormat.allCases) { f in
+                        Text(f.rawValue).tag(f)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                switch serverMgr.tlsCertFormat {
+                case .pkcs12:
+                    pkcs12Section
+                case .pem:
+                    pemSection
+                }
+
+                HStack {
+                    Group {
+                        if revealPassword {
+                            TextField(passwordPlaceholder, text: $passwordText)
+                        } else {
+                            SecureField(passwordPlaceholder, text: $passwordText)
+                        }
+                    }
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { applyPassword() }
+
+                    Button { revealPassword.toggle() } label: {
+                        Image(systemName: revealPassword ? "eye.slash" : "eye")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(revealPassword ? "Hide password" : "Show password")
+                }
+
+                HStack {
+                    Button("Save password") { applyPassword() }
+                        .disabled(passwordText == (serverMgr.tlsEnabled ? (Config().tlsP12Password ?? "") : ""))
+                    Button("Test certificate") { runTest() }
+                        .disabled(!certComplete)
+                    Spacer()
+                }
+
+                if let result = testResult {
+                    testResultView(result)
+                }
+            } header: {
+                Text("Certificate").font(.headline)
+            } footer: {
+                Text(certificateFooter)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Redirect HTTP to HTTPS", isOn: redirectEnabledBinding)
+                if serverMgr.httpRedirectPort > 0 {
+                    LabeledContent("Redirect port:") {
+                        HStack(spacing: 6) {
+                            TextField("", text: $redirectPortText)
+                                .frame(width: 80)
+                                .multilineTextAlignment(.trailing)
+                            Button("Set Port") { applyRedirectPort() }
+                                .disabled(!redirectPortTextIsValidChange)
+                        }
+                    }
+                    if serverMgr.httpRedirectPort == serverMgr.port {
+                        Text("Redirect port matches the HTTPS port — redirect is ignored.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+            } header: {
+                Text("HTTP → HTTPS Upgrade").font(.headline)
+            } footer: {
+                Text("When enabled, a plain-HTTP listener on the chosen port answers every request with 308 Permanent Redirect to the matching https:// URL. Only active when HTTPS is on.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Picker("Minimum:", selection: minVersionBinding) {
+                    ForEach(TLSVersionPref.ordered) { v in Text(v.rawValue).tag(v) }
+                }
+                Picker("Maximum:", selection: maxVersionBinding) {
+                    ForEach(TLSVersionPref.ordered) { v in Text(v.rawValue).tag(v) }
+                }
+                if serverMgr.tlsMinVersion.rank > serverMgr.tlsMaxVersion.rank {
+                    Text("Minimum is higher than maximum — the server will swap them when starting.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            } header: {
+                Text("TLS Versions").font(.headline)
+            } footer: {
+                Text("TLS 1.0 / 1.1 are deprecated and only useful for legacy clients. TLS 1.3 is recommended.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Use NIO defaults", isOn: useDefaultsBinding)
+                if !useDefaults {
+                    ForEach(TLSCipherCatalog.recommended, id: \.self) { cipher in
+                        Toggle(cipher, isOn: cipherBinding(for: cipher))
+                            .font(.system(.callout, design: .monospaced))
+                    }
+                }
+            } header: {
+                Text("Cipher Suites (TLS ≤ 1.2)").font(.headline)
+            } footer: {
+                Text("TLS 1.3 cipher suites are fixed by RFC 8446 (AES-GCM and ChaCha20-Poly1305) and cannot be customized.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear {
+            passwordText = serverMgr.tlsEnabled ? (Config().tlsP12Password ?? "") : ""
+            refreshCertState()
+            redirectPortText = String(serverMgr.httpRedirectPort)
+        }
+        .onChange(of: serverMgr.httpRedirectPort) { _, new in
+            redirectPortText = String(new)
+        }
+        .onChange(of: serverMgr.tlsCertFormat) { _, _ in
+            refreshCertState()
+            testResult = nil
+        }
+    }
+
+    // MARK: Per-format subviews
+
+    @ViewBuilder
+    private var pkcs12Section: some View {
+        HStack {
+            Image(systemName: p12Present ? "checkmark.seal.fill" : "xmark.seal")
+                .foregroundStyle(p12Present ? .green : .secondary)
+            Text(p12Present
+                 ? "Bundle imported: \(CertificateStore.p12Filename)"
+                 : "No PKCS#12 bundle imported")
+                .font(.callout)
+            Spacer()
+        }
+        HStack {
+            Button("Choose .p12 / .pfx…") { importPKCS12() }
+            if p12Present {
+                Button(role: .destructive) {
+                    CertificateStore.deletePKCS12()
+                    refreshCertState()
+                    testResult = nil
+                    serverMgr.reload()
+                } label: { Text("Remove") }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var pemSection: some View {
+        HStack {
+            Image(systemName: pemCertPresent ? "checkmark.seal.fill" : "xmark.seal")
+                .foregroundStyle(pemCertPresent ? .green : .secondary)
+            Text(pemCertPresent
+                 ? "Certificate: \(CertificateStore.pemCertFilename)"
+                 : "No certificate file imported")
+                .font(.callout)
+            Spacer()
+            Button("Choose cert…") { importPEMCert() }
+        }
+        HStack {
+            Image(systemName: pemKeyPresent ? "checkmark.seal.fill" : "xmark.seal")
+                .foregroundStyle(pemKeyPresent ? .green : .secondary)
+            Text(pemKeyPresent
+                 ? "Private key: \(CertificateStore.pemKeyFilename)"
+                 : "No private key file imported")
+                .font(.callout)
+            Spacer()
+            Button("Choose key…") { importPEMKey() }
+        }
+        if pemCertPresent || pemKeyPresent {
+            HStack {
+                Spacer()
+                Button(role: .destructive) {
+                    CertificateStore.deletePEMFiles()
+                    refreshCertState()
+                    testResult = nil
+                    serverMgr.reload()
+                } label: { Text("Remove PEM files") }
+            }
+        }
+    }
+
+    // MARK: Computed strings
+
+    private var passwordPlaceholder: String {
+        switch serverMgr.tlsCertFormat {
+        case .pkcs12: return "PKCS#12 password"
+        case .pem:    return "Private key password (leave empty if unencrypted)"
+        }
+    }
+
+    private var certificateFooter: String {
+        switch serverMgr.tlsCertFormat {
+        case .pkcs12:
+            return "PKCS#12 bundles ship the cert chain and private key together. The bundle password is held in the Keychain."
+        case .pem:
+            return "PEM mode reads the certificate chain from server-cert.pem and the private key from server-key.pem. The password is only required if the key is AES- or 3DES-encrypted (typically a PEM file starting with ENCRYPTED PRIVATE KEY)."
+        }
+    }
+
+    // MARK: Bindings
+
+    private var tlsEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { serverMgr.tlsEnabled },
+            set: { newValue in
+                guard newValue != serverMgr.tlsEnabled else { return }
+                UserDefaults.standard.set(newValue, forKey: Config.tlsEnabledKey)
+                applyHTTPSDefaultPortsIfReady(tlsEnabled: newValue)
+                serverMgr.reload()
+            }
+        )
+    }
+
+    /// When HTTPS gets enabled with a usable certificate, snap the listening
+    /// port to 8888 and the HTTP redirect port to 8787 so the conventional
+    /// "HTTPS on a custom port + plain HTTP for upgrade" layout is one click away.
+    /// No-op when TLS is off or the certificate material is incomplete.
+    private func applyHTTPSDefaultPortsIfReady(tlsEnabled: Bool) {
+        guard tlsEnabled,
+              CertificateStore.isComplete(format: serverMgr.tlsCertFormat)
+        else { return }
+        UserDefaults.standard.set(8888, forKey: Config.portKey)
+        UserDefaults.standard.set(8787, forKey: Config.httpRedirectPortKey)
+    }
+
+    private var certFormatBinding: Binding<TLSCertificateFormat> {
+        Binding(
+            get: { serverMgr.tlsCertFormat },
+            set: { newValue in
+                guard newValue != serverMgr.tlsCertFormat else { return }
+                UserDefaults.standard.set(newValue.rawValue, forKey: Config.tlsCertFormatKey)
+                serverMgr.reload()
+            }
+        )
+    }
+
+    private var minVersionBinding: Binding<TLSVersionPref> {
+        Binding(
+            get: { serverMgr.tlsMinVersion },
+            set: { newValue in
+                guard newValue != serverMgr.tlsMinVersion else { return }
+                UserDefaults.standard.set(newValue.rawValue, forKey: Config.tlsMinVersionKey)
+                serverMgr.reload()
+            }
+        )
+    }
+
+    private var maxVersionBinding: Binding<TLSVersionPref> {
+        Binding(
+            get: { serverMgr.tlsMaxVersion },
+            set: { newValue in
+                guard newValue != serverMgr.tlsMaxVersion else { return }
+                UserDefaults.standard.set(newValue.rawValue, forKey: Config.tlsMaxVersionKey)
+                serverMgr.reload()
+            }
+        )
+    }
+
+    private var useDefaults: Bool { serverMgr.tlsCustomCiphers == nil }
+
+    private var useDefaultsBinding: Binding<Bool> {
+        Binding(
+            get: { useDefaults },
+            set: { newValue in
+                if newValue {
+                    UserDefaults.standard.removeObject(forKey: Config.tlsCustomCiphersKey)
+                } else {
+                    // Switching to custom — seed with the full recommended list.
+                    UserDefaults.standard.set(TLSCipherCatalog.recommended, forKey: Config.tlsCustomCiphersKey)
+                }
+                serverMgr.reload()
+            }
+        )
+    }
+
+    private var redirectEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { serverMgr.httpRedirectPort > 0 },
+            set: { isOn in
+                if isOn {
+                    // Pick a sensible default that doesn't collide with the HTTPS port.
+                    let candidate = serverMgr.port == 8080 ? 8081 : 8080
+                    UserDefaults.standard.set(candidate, forKey: Config.httpRedirectPortKey)
+                } else {
+                    UserDefaults.standard.removeObject(forKey: Config.httpRedirectPortKey)
+                }
+                serverMgr.reload()
+            }
+        )
+    }
+
+    private func applyRedirectPort() {
+        guard let p = Int(redirectPortText), p > 0, p < 65536, p != serverMgr.httpRedirectPort else {
+            redirectPortText = String(serverMgr.httpRedirectPort)
+            return
+        }
+        UserDefaults.standard.set(p, forKey: Config.httpRedirectPortKey)
+        serverMgr.reload()
+    }
+
+    /// Enabled state for the TLS-tab "Set Port" button next to the redirect field.
+    private var redirectPortTextIsValidChange: Bool {
+        guard let p = Int(redirectPortText), p > 0, p < 65536 else { return false }
+        return p != serverMgr.httpRedirectPort
+    }
+
+    private func cipherBinding(for name: String) -> Binding<Bool> {
+        Binding(
+            get: { (serverMgr.tlsCustomCiphers ?? []).contains(name) },
+            set: { isOn in
+                var list = serverMgr.tlsCustomCiphers ?? []
+                if isOn {
+                    if !list.contains(name) { list.append(name) }
+                } else {
+                    list.removeAll { $0 == name }
+                }
+                if list.isEmpty {
+                    // Don't allow an empty whitelist (= no ciphers, broken). Revert to defaults.
+                    UserDefaults.standard.removeObject(forKey: Config.tlsCustomCiphersKey)
+                } else {
+                    UserDefaults.standard.set(list, forKey: Config.tlsCustomCiphersKey)
+                }
+                serverMgr.reload()
+            }
+        )
+    }
+
+    // MARK: Actions
+
+    private func runOpenPanel(title: String, extensions: [String]) -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = title
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        let allowed = extensions.compactMap { UTType(filenameExtension: $0) }
+        if !allowed.isEmpty { panel.allowedContentTypes = allowed }
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    private func importPKCS12() {
+        guard let url = runOpenPanel(title: "Select PKCS#12 bundle", extensions: ["p12", "pfx"]) else { return }
+        do {
+            _ = try CertificateStore.importPKCS12(from: url)
+            refreshCertState()
+            testResult = nil
+            applyHTTPSDefaultPortsIfReady(tlsEnabled: serverMgr.tlsEnabled)
+            serverMgr.reload()
+        } catch {
+            testResult = .failure("Import failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func importPEMCert() {
+        guard let url = runOpenPanel(title: "Select PEM certificate (chain)", extensions: ["pem", "crt", "cer"]) else { return }
+        do {
+            _ = try CertificateStore.importPEMCertificate(from: url)
+            refreshCertState()
+            testResult = nil
+            applyHTTPSDefaultPortsIfReady(tlsEnabled: serverMgr.tlsEnabled)
+            serverMgr.reload()
+        } catch {
+            testResult = .failure("Import failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func importPEMKey() {
+        guard let url = runOpenPanel(title: "Select PEM private key", extensions: ["pem", "key"]) else { return }
+        do {
+            _ = try CertificateStore.importPEMKey(from: url)
+            refreshCertState()
+            testResult = nil
+            applyHTTPSDefaultPortsIfReady(tlsEnabled: serverMgr.tlsEnabled)
+            serverMgr.reload()
+        } catch {
+            testResult = .failure("Import failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func applyPassword() {
+        let trimmed = passwordText
+        if trimmed.isEmpty {
+            KeychainTLSPassword.delete()
+        } else {
+            KeychainTLSPassword.save(trimmed)
+        }
+        serverMgr.reload()
+    }
+
+    private func runTest() {
+        do {
+            let info = try CertificateStore.inspect(format: serverMgr.tlsCertFormat, password: passwordText)
+            testResult = .success(info)
+        } catch {
+            testResult = .failure(error.localizedDescription)
+        }
+    }
+
+    @ViewBuilder
+    private func testResultView(_ result: TestResult) -> some View {
+        switch result {
+        case .success(let info):
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Certificate loaded", systemImage: "checkmark.seal.fill")
+                    .foregroundStyle(.green)
+                Text("Subject: \(info.subject)").font(.caption)
+                if !info.issuer.isEmpty {
+                    Text("Issuer: \(info.issuer)").font(.caption)
+                }
+                Text("Valid from \(info.validFrom, format: .dateTime.day().month().year()) to \(info.validUntil, format: .dateTime.day().month().year())").font(.caption)
+                if info.isExpired {
+                    Text("EXPIRED")
+                        .font(.caption).bold()
+                        .foregroundStyle(.red)
+                } else if info.daysUntilExpiry < 30 {
+                    Text("Expires in \(info.daysUntilExpiry) day(s)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.green.opacity(0.08)))
+        case .failure(let msg):
+            Label(msg, systemImage: "xmark.octagon.fill")
+                .foregroundStyle(.red)
+                .font(.caption)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+

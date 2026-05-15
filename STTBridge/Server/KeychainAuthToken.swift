@@ -1,17 +1,12 @@
 import Foundation
 import Security
 
-/// Persists the HTTP auth token in the macOS Keychain instead of UserDefaults
-/// so it is encrypted at rest and invisible to `defaults read`. Sandboxed apps
-/// can read/write their own generic password items without any extra entitlement.
-enum KeychainAuthToken {
-    /// Item identifier. Scoped per-app by the system using the app's signing identity,
-    /// so multiple apps can't collide on this name.
-    private static let service = "STTBridge.authToken"
-    private static let account = "default"
-
-    /// Returns the stored token, or nil if none exists / Keychain is unavailable.
-    static func load() -> String? {
+/// Low-level Keychain helper for a single string secret, scoped per-(service, account).
+/// Used by `KeychainAuthToken` for the HTTP auth token and `KeychainTLSPassword`
+/// for the PKCS#12 passphrase.
+enum KeychainSecret {
+    /// Returns the stored value, or nil if none exists / Keychain is unavailable.
+    static func load(service: String, account: String = "default") -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -28,15 +23,15 @@ enum KeychainAuthToken {
         case errSecItemNotFound:
             return nil
         default:
-            print("KeychainAuthToken.load failed: OSStatus \(status)")
+            print("KeychainSecret.load(\(service)) failed: OSStatus \(status)")
             return nil
         }
     }
 
-    /// Stores or replaces the token. Returns true on success.
+    /// Stores or replaces the value. Returns true on success.
     @discardableResult
-    static func save(_ token: String) -> Bool {
-        let data = Data(token.utf8)
+    static func save(service: String, account: String = "default", value: String) -> Bool {
+        let data = Data(value.utf8)
         let lookup: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -55,16 +50,16 @@ enum KeychainAuthToken {
             add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
             let addStatus = SecItemAdd(add as CFDictionary, nil)
             if addStatus == errSecSuccess { return true }
-            print("KeychainAuthToken.save (add) failed: OSStatus \(addStatus)")
+            print("KeychainSecret.save(\(service)) add failed: OSStatus \(addStatus)")
             return false
         }
 
-        print("KeychainAuthToken.save (update) failed: OSStatus \(updateStatus)")
+        print("KeychainSecret.save(\(service)) update failed: OSStatus \(updateStatus)")
         return false
     }
 
-    /// Removes the stored token. No-op if none exists.
-    static func delete() {
+    /// Removes the stored value. No-op if none exists.
+    static func delete(service: String, account: String = "default") {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -72,7 +67,32 @@ enum KeychainAuthToken {
         ]
         let status = SecItemDelete(query as CFDictionary)
         if status != errSecSuccess && status != errSecItemNotFound {
-            print("KeychainAuthToken.delete failed: OSStatus \(status)")
+            print("KeychainSecret.delete(\(service)) failed: OSStatus \(status)")
         }
     }
+}
+
+/// Persists the HTTP auth token in the macOS Keychain instead of UserDefaults
+/// so it is encrypted at rest and invisible to `defaults read`.
+enum KeychainAuthToken {
+    private static let service = "STTBridge.authToken"
+
+    static func load() -> String? { KeychainSecret.load(service: service) }
+
+    @discardableResult
+    static func save(_ token: String) -> Bool { KeychainSecret.save(service: service, value: token) }
+
+    static func delete() { KeychainSecret.delete(service: service) }
+}
+
+/// Persists the PKCS#12 passphrase used to unlock the TLS certificate bundle.
+enum KeychainTLSPassword {
+    private static let service = "STTBridge.tlsP12Password"
+
+    static func load() -> String? { KeychainSecret.load(service: service) }
+
+    @discardableResult
+    static func save(_ password: String) -> Bool { KeychainSecret.save(service: service, value: password) }
+
+    static func delete() { KeychainSecret.delete(service: service) }
 }

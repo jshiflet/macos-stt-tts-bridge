@@ -11,12 +11,33 @@ struct Config {
     static let authTokenKey = "authToken"
     static let defaultLangKey = "defaultLang"
     static let offlineOnlyKey = "offlineOnly"
+    static let tlsEnabledKey = "tlsEnabled"
+    static let tlsCertFormatKey = "tlsCertFormat"
+    static let tlsMinVersionKey = "tlsMinVersion"
+    static let tlsMaxVersionKey = "tlsMaxVersion"
+    static let tlsCustomCiphersKey = "tlsCustomCiphers"
+    static let httpRedirectPortKey = "httpRedirectPort"
 
     let port: Int
     let bindHosts: [String]
     let authToken: String?
     let defaultLang: String
     let offlineOnly: Bool
+    let tlsEnabled: Bool
+    /// On-disk format used for the certificate material.
+    let tlsCertFormat: TLSCertificateFormat
+    /// Passphrase that unlocks the private key. For PKCS#12 it decrypts the
+    /// bundle; for PEM it decrypts an AES/3DES-wrapped private key file.
+    /// Empty/nil means the key is plaintext (only valid for PEM).
+    let tlsP12Password: String?
+    let tlsMinVersion: TLSVersionPref
+    let tlsMaxVersion: TLSVersionPref
+    /// nil = use NIO defaults. Non-empty = colon-joined list passed to TLSConfiguration.cipherSuites.
+    let tlsCustomCiphers: [String]?
+    /// 0 = HTTP→HTTPS redirect disabled. Otherwise, when `tlsEnabled` is true and this
+    /// port differs from `port`, a plain-HTTP listener binds here and 308-redirects
+    /// every request to https://host:port/...
+    let httpRedirectPort: Int
 
     init(
         env: [String: String] = ProcessInfo.processInfo.environment,
@@ -67,6 +88,79 @@ struct Config {
         } else {
             offlineOnly = (env["OFFLINE_ONLY"] ?? "false").lowercased() == "true"
         }
+
+        if let cliTLS = cli["tls"] {
+            tlsEnabled = cliTLS.lowercased() == "true"
+        } else if defaults.object(forKey: Self.tlsEnabledKey) != nil {
+            tlsEnabled = defaults.bool(forKey: Self.tlsEnabledKey)
+        } else {
+            tlsEnabled = (env["TLS_ENABLED"] ?? "false").lowercased() == "true"
+        }
+
+        if let cliFmt = cli["tls-cert-format"], let f = TLSCertificateFormat(rawValue: cliFmt) {
+            tlsCertFormat = f
+        } else if let stored = defaults.string(forKey: Self.tlsCertFormatKey),
+                  let f = TLSCertificateFormat(rawValue: stored) {
+            tlsCertFormat = f
+        } else if let envFmt = env["TLS_CERT_FORMAT"], let f = TLSCertificateFormat(rawValue: envFmt) {
+            tlsCertFormat = f
+        } else {
+            tlsCertFormat = .pkcs12
+        }
+
+        if let cliPass = cli["tls-password"] {
+            tlsP12Password = cliPass.isEmpty ? nil : cliPass
+        } else if let kc = KeychainTLSPassword.load(), !kc.isEmpty {
+            tlsP12Password = kc
+        } else {
+            tlsP12Password = env["TLS_PASSWORD"]
+        }
+
+        tlsMinVersion = Self.resolveTLSVersion(
+            cliKey: "tls-min-version",
+            udKey: Self.tlsMinVersionKey,
+            envKey: "TLS_MIN_VERSION",
+            fallback: .tls12,
+            cli: cli, env: env, defaults: defaults
+        )
+        tlsMaxVersion = Self.resolveTLSVersion(
+            cliKey: "tls-max-version",
+            udKey: Self.tlsMaxVersionKey,
+            envKey: "TLS_MAX_VERSION",
+            fallback: .tls13,
+            cli: cli, env: env, defaults: defaults
+        )
+
+        if let cliCiphers = cli["tls-ciphers"], !cliCiphers.isEmpty {
+            tlsCustomCiphers = cliCiphers.split(separator: ":").map(String.init)
+        } else if let stored = defaults.stringArray(forKey: Self.tlsCustomCiphersKey), !stored.isEmpty {
+            tlsCustomCiphers = stored
+        } else {
+            tlsCustomCiphers = nil
+        }
+
+        if let cliRedir = cli["http-redirect-port"], let n = Int(cliRedir) {
+            httpRedirectPort = n
+        } else if let stored = defaults.object(forKey: Self.httpRedirectPortKey) as? Int {
+            httpRedirectPort = stored
+        } else {
+            httpRedirectPort = Int(env["HTTP_REDIRECT_PORT"] ?? "") ?? 0
+        }
+    }
+
+    private static func resolveTLSVersion(
+        cliKey: String,
+        udKey: String,
+        envKey: String,
+        fallback: TLSVersionPref,
+        cli: [String: String],
+        env: [String: String],
+        defaults: UserDefaults
+    ) -> TLSVersionPref {
+        if let cliVal = cli[cliKey], let v = TLSVersionPref(rawValue: cliVal) { return v }
+        if let stored = defaults.string(forKey: udKey), let v = TLSVersionPref(rawValue: stored) { return v }
+        if let envVal = env[envKey], let v = TLSVersionPref(rawValue: envVal) { return v }
+        return fallback
     }
 
     /// Resolves the list of bind hosts. Priority: CLI > UserDefaults array > legacy

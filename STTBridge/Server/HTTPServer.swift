@@ -3,6 +3,7 @@ import NIOCore
 import NIOPosix
 import NIOHTTP1
 import NIOWebSocket
+import NIOSSL
 import AVFoundation
 import Speech
 
@@ -52,6 +53,78 @@ final class HTTPServer {
         return nil
     }
 
+    /// Builds an `NIOSSLContext` from the imported certificate material plus the
+    /// user's TLS version / cipher knobs. Supports both PKCS#12 bundles and PEM
+    /// cert + key file pairs (with optional passphrase for AES/3DES-wrapped keys).
+    /// Throws a descriptive error if anything is missing or fails to parse.
+    static func makeSSLContext(config: Config) throws -> NIOSSLContext {
+        let password = config.tlsP12Password ?? ""
+        let chain: [NIOSSLCertificate]
+        let privateKey: NIOSSLPrivateKey
+
+        switch config.tlsCertFormat {
+        case .pkcs12:
+            let url: URL
+            do { url = try CertificateStore.p12URL() } catch {
+                throw TLSError.loadFailed("Could not resolve certificate path: \(error.localizedDescription)")
+            }
+            guard FileManager.default.fileExists(atPath: url.path) else { throw TLSError.noCertificate }
+            do {
+                let pass: [UInt8]? = password.isEmpty ? nil : Array(password.utf8)
+                let bundle = try NIOSSLPKCS12Bundle(file: url.path, passphrase: pass)
+                chain = bundle.certificateChain
+                privateKey = bundle.privateKey
+            } catch {
+                throw TLSError.loadFailed(error.localizedDescription)
+            }
+
+        case .pem:
+            let certURL: URL
+            let keyURL: URL
+            do {
+                certURL = try CertificateStore.pemCertURL()
+                keyURL = try CertificateStore.pemKeyURL()
+            } catch {
+                throw TLSError.loadFailed("Could not resolve PEM paths: \(error.localizedDescription)")
+            }
+            guard FileManager.default.fileExists(atPath: certURL.path) else { throw TLSError.noCertificate }
+            guard FileManager.default.fileExists(atPath: keyURL.path) else {
+                throw TLSError.loadFailed("Private key file is missing")
+            }
+            do {
+                chain = try NIOSSLCertificate.fromPEMFile(certURL.path)
+            } catch {
+                throw TLSError.loadFailed("Certificate file: \(error.localizedDescription)")
+            }
+            do {
+                privateKey = try CertificateStore.loadPEMPrivateKey(keyURL: keyURL, password: password)
+            } catch {
+                throw TLSError.loadFailed("Private key: \(error.localizedDescription)")
+            }
+        }
+
+        var tls = TLSConfiguration.makeServerConfiguration(
+            certificateChain: chain.map { NIOSSLCertificateSource.certificate($0) },
+            privateKey: .privateKey(privateKey)
+        )
+        // Validate min ≤ max, swap if user got them wrong.
+        let lo = min(config.tlsMinVersion.rank, config.tlsMaxVersion.rank)
+        let hi = max(config.tlsMinVersion.rank, config.tlsMaxVersion.rank)
+        let minVer = TLSVersionPref.ordered.first { $0.rank == lo } ?? .tls12
+        let maxVer = TLSVersionPref.ordered.first { $0.rank == hi } ?? .tls13
+        tls.minimumTLSVersion = minVer.niossl
+        tls.maximumTLSVersion = maxVer.niossl
+
+        if let ciphers = config.tlsCustomCiphers, !ciphers.isEmpty {
+            tls.cipherSuites = ciphers.joined(separator: ":")
+        }
+        // HTTP/1.1 over TLS — declare it via ALPN so well-behaved clients don't
+        // attempt h2 (we don't speak HTTP/2 here).
+        tls.applicationProtocols = ["http/1.1"]
+
+        return try NIOSSLContext(configuration: tls)
+    }
+
     init(config: Config) {
         self.cfg = config
         self.stt = STTEngine(config: config)
@@ -70,15 +143,34 @@ final class HTTPServer {
             }
         )
 
+        // Build the SSL context once. Any failure (missing cert, wrong password,
+        // unreadable PKCS#12) surfaces here before the socket is bound, so the
+        // user gets a clear error instead of mysterious handshake failures later.
+        let sslContext: NIOSSLContext?
+        if cfg.tlsEnabled {
+            sslContext = try Self.makeSSLContext(config: cfg)
+        } else {
+            sslContext = nil
+        }
+
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 256)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 let handler = HTTPHandler(server: self, upgrader: upgrader)
-                return channel.pipeline.configureHTTPServerPipeline(
-                    withServerUpgrade: (upgraders: [upgrader], completionHandler: { _ in }),
-                    withErrorHandling: true
-                ).flatMap { channel.pipeline.addHandler(handler) }
+                let prelude: EventLoopFuture<Void>
+                if let ctx = sslContext {
+                    let sslHandler = NIOSSLServerHandler(context: ctx)
+                    prelude = channel.pipeline.addHandler(sslHandler)
+                } else {
+                    prelude = channel.eventLoop.makeSucceededFuture(())
+                }
+                return prelude.flatMap {
+                    channel.pipeline.configureHTTPServerPipeline(
+                        withServerUpgrade: (upgraders: [upgrader], completionHandler: { _ in }),
+                        withErrorHandling: true
+                    )
+                }.flatMap { channel.pipeline.addHandler(handler) }
             }
             .childChannelOption(ChannelOptions.maxMessagesPerRead, value: 16)
             .childChannelOption(ChannelOptions.recvAllocator, value: AdaptiveRecvByteBufferAllocator())
@@ -96,8 +188,43 @@ final class HTTPServer {
             try? group.syncShutdownGracefully()
             throw error
         }
+
+        // Optional HTTP → HTTPS redirect listener. Only meaningful when TLS is
+        // active; binds on every host at `httpRedirectPort` and 308-redirects
+        // every request to the matching https:// URL.
+        let wantsRedirect =
+            cfg.tlsEnabled &&
+            cfg.httpRedirectPort > 0 &&
+            cfg.httpRedirectPort != cfg.port
+        if wantsRedirect {
+            let redirectBootstrap = ServerBootstrap(group: group)
+                .serverChannelOption(ChannelOptions.backlog, value: 256)
+                .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+                .childChannelInitializer { [tlsPort = cfg.port] channel in
+                    channel.pipeline.configureHTTPServerPipeline(withErrorHandling: true).flatMap {
+                        channel.pipeline.addHandler(HTTPRedirectHandler(tlsPort: tlsPort))
+                    }
+                }
+                .childChannelOption(ChannelOptions.maxMessagesPerRead, value: 16)
+            do {
+                for host in cfg.bindHosts {
+                    let ch = try redirectBootstrap.bind(host: host, port: cfg.httpRedirectPort).wait()
+                    bound.append(ch)
+                }
+            } catch {
+                for ch in bound { ch.close(promise: nil) }
+                try? group.syncShutdownGracefully()
+                throw error
+            }
+        }
+
         self.channels = bound
-        let urls = cfg.bindHosts.map { "http://\($0):\(cfg.port)" }.joined(separator: ", ")
+        let scheme = cfg.tlsEnabled ? "https" : "http"
+        var urls = cfg.bindHosts.map { "\(scheme)://\($0):\(cfg.port)" }.joined(separator: ", ")
+        if wantsRedirect {
+            let redirectUrls = cfg.bindHosts.map { "http://\($0):\(cfg.httpRedirectPort)" }.joined(separator: ", ")
+            urls += "  (redirect: \(redirectUrls) → \(scheme))"
+        }
         print("🔊 STTBridge running at \(urls)")
 
         // Block until every bound channel is closed (stop() closes them all).
@@ -509,3 +636,54 @@ final class WebSocketStreamHandler: ChannelInboundHandler {
         ch.writeAndFlush(WebSocketFrame(fin: true, opcode: .text, data: buf), promise: nil)
     }
 }
+// MARK: - HTTP → HTTPS redirect handler
+
+/// Plain-HTTP handler that 308-redirects every request to the matching https:// URL
+/// on `tlsPort`. Bound on the same hosts as the main server when TLS is on and the
+/// user has configured a redirect port.
+final class HTTPRedirectHandler: ChannelInboundHandler {
+    typealias InboundIn = HTTPServerRequestPart
+    typealias OutboundOut = HTTPServerResponsePart
+
+    private let tlsPort: Int
+    private var head: HTTPRequestHead?
+
+    init(tlsPort: Int) {
+        self.tlsPort = tlsPort
+    }
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let part = self.unwrapInboundIn(data)
+        switch part {
+        case .head(let h):
+            head = h
+        case .body:
+            break  // Body discarded — client retries POST/PUT on the redirected URL.
+        case .end:
+            guard let h = head else { return }
+            head = nil
+
+            // Derive the destination host: strip any :port from the incoming Host
+            // header. Fall back to "localhost" for ancient HTTP/1.0 clients.
+            let hostHeader = h.headers.first(name: "Host") ?? "localhost"
+            let hostOnly = hostHeader.split(separator: ":").first.map(String.init) ?? hostHeader
+            let location = "https://\(hostOnly):\(tlsPort)\(h.uri)"
+
+            var headers = HTTPHeaders()
+            headers.add(name: "Location", value: location)
+            headers.add(name: "Content-Length", value: "0")
+            headers.add(name: "Connection", value: "close")
+
+            let respHead = HTTPResponseHead(
+                version: .http1_1,
+                status: .permanentRedirect,   // 308: preserves request method
+                headers: headers
+            )
+            context.write(self.wrapOutboundOut(.head(respHead)), promise: nil)
+            context.writeAndFlush(self.wrapOutboundOut(.end(nil))).whenComplete { _ in
+                context.close(promise: nil)
+            }
+        }
+    }
+}
+

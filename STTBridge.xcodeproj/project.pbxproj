@@ -221,6 +221,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
@@ -279,6 +280,7 @@
 				SDKROOT = macosx;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -310,7 +312,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Mac Speech Bridge";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright ${COPYRIGHT_YEAR} David Fankhänel, Jason Shiflet";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "To enable Speech-to-Text services for the Home Assistant STT integration";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "To enable Speech-to-Text services for the Home Assistant STT integration";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -359,7 +361,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Mac Speech Bridge";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright ${COPYRIGHT_YEAR} David Fankhänel, Jason Shiflet";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "To enable Speech-to-Text services for the Home Assistant STT integration";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "To enable Speech-to-Text services for the Home Assistant STT integration";
 				LD_RUNPATH_SEARCH_PATHS = (

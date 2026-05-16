@@ -32,9 +32,12 @@ struct STTBridgeApp: App {
             } else {
                 ContentView(status: serverMgr.status)
                     .environmentObject(serverMgr)
+                    .navigationTitle("STTBridge")
             }
         }
-        .defaultSize(width: isHeadless ? 0 : 800, height: isHeadless ? 0 : 600)
+        .defaultSize(width: isHeadless ? 0 : 620, height: isHeadless ? 0 : 720)
+        .windowResizability(.contentSize)
+        .windowToolbarStyle(.unified)
 
         Settings {
             ServerSettingsView()
@@ -56,6 +59,7 @@ final class ServerManager: ObservableObject {
     @Published var tlsMinVersion: TLSVersionPref
     @Published var tlsMaxVersion: TLSVersionPref
     @Published var tlsCustomCiphers: [String]?
+    @Published var tlsCurves: [String]?
     @Published var httpRedirectPort: Int
 
     private var server: HTTPServer?
@@ -79,6 +83,7 @@ final class ServerManager: ObservableObject {
         self.tlsMinVersion = cfg.tlsMinVersion
         self.tlsMaxVersion = cfg.tlsMaxVersion
         self.tlsCustomCiphers = cfg.tlsCustomCiphers
+        self.tlsCurves = cfg.tlsCurves
         self.httpRedirectPort = cfg.httpRedirectPort
 
         SFSpeechRecognizer.requestAuthorization { st in
@@ -115,6 +120,7 @@ final class ServerManager: ObservableObject {
                 self.tlsMinVersion = config.tlsMinVersion
                 self.tlsMaxVersion = config.tlsMaxVersion
                 self.tlsCustomCiphers = config.tlsCustomCiphers
+                self.tlsCurves = config.tlsCurves
                 self.httpRedirectPort = config.httpRedirectPort
                 self.status = "Server running at \(Self.urlList(hosts: config.bindHosts, port: config.port, tls: config.tlsEnabled))"
             }

@@ -1,9 +1,6 @@
 {
   "fill" : {
-    "linear-gradient" : [
-      "extended-gray:1.00000,1.00000",
-      "extended-gray:1.00000,1.00000"
-    ],
+    "automatic-gradient" : "extended-gray:1.00000,1.00000",
     "orientation" : {
       "start" : {
         "x" : 0.5,
@@ -19,47 +16,57 @@
     {
       "layers" : [
         {
-          "image-name" : "quote.bubble.fill.white.svg",
-          "name" : "quote.bubble.fill.white",
-          "opacity-specializations" : [
+          "blend-mode-specializations" : [
             {
-              "value" : 0
+              "appearance" : "tinted",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "value" : {
+                "automatic-gradient" : "extended-gray:0.00000,1.00000"
+              }
             },
             {
               "appearance" : "dark",
-              "value" : 1
+              "value" : {
+                "automatic-gradient" : "extended-gray:1.00000,1.00000"
+              }
             },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "linear-gradient" : [
+                  "extended-gray:1.00000,1.00000",
+                  "extended-gray:0.75000,1.00000"
+                ],
+                "orientation" : {
+                  "start" : {
+                    "x" : 0.5,
+                    "y" : 0
+                  },
+                  "stop" : {
+                    "x" : 0.5,
+                    "y" : 0.7
+                  }
+                }
+              }
+            }
+          ],
+          "image-name" : "waveform_and_person.svg",
+          "name" : "waveform_and_person",
+          "opacity-specializations" : [
             {
               "appearance" : "tinted",
               "value" : 1
             }
           ],
           "position" : {
-            "scale" : 0.75,
+            "scale" : 1,
             "translation-in-points" : [
-              0,
-              0
-            ]
-          }
-        },
-        {
-          "image-name" : "quote.bubble.fill.svg",
-          "name" : "quote.bubble.fill",
-          "opacity-specializations" : [
-            {
-              "appearance" : "dark",
-              "value" : 0
-            },
-            {
-              "appearance" : "tinted",
-              "value" : 0
-            }
-          ],
-          "position" : {
-            "scale" : 0.75,
-            "translation-in-points" : [
-              0,
-              0
+              -71.29648900000007,
+              -13.688207312500026
             ]
           }
         }
@@ -75,9 +82,6 @@
     }
   ],
   "supported-platforms" : {
-    "circles" : [
-      "watchOS"
-    ],
     "squares" : "shared"
   }
 }

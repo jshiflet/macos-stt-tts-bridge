@@ -1,0 +1,12 @@
+//
+//  Config.xcconfig
+//  STTBridge
+//
+//  Created by Jason Shiflet on 5/16/26.
+//
+
+// Configuration settings file format documentation can be found at:
+// https://help.apple.com/xcode/#/dev745c5c974
+
+VERSION = 0.1.9
+BUILD_NUMBER = 202605165

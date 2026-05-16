@@ -16,6 +16,7 @@ struct Config {
     static let tlsMinVersionKey = "tlsMinVersion"
     static let tlsMaxVersionKey = "tlsMaxVersion"
     static let tlsCustomCiphersKey = "tlsCustomCiphers"
+    static let tlsCurvesKey = "tlsCurves"
     static let httpRedirectPortKey = "httpRedirectPort"
 
     let port: Int
@@ -34,6 +35,9 @@ struct Config {
     let tlsMaxVersion: TLSVersionPref
     /// nil = use NIO defaults. Non-empty = colon-joined list passed to TLSConfiguration.cipherSuites.
     let tlsCustomCiphers: [String]?
+    /// nil = use NIOSSL's built-in curve set. Non-empty = curve identifier whitelist
+    /// applied to TLSConfiguration.curves (see TLSCurveCatalog).
+    let tlsCurves: [String]?
     /// 0 = HTTP→HTTPS redirect disabled. Otherwise, when `tlsEnabled` is true and this
     /// port differs from `port`, a plain-HTTP listener binds here and 308-redirects
     /// every request to https://host:port/...
@@ -137,6 +141,14 @@ struct Config {
             tlsCustomCiphers = stored
         } else {
             tlsCustomCiphers = nil
+        }
+
+        if let cliCurves = cli["tls-curves"], !cliCurves.isEmpty {
+            tlsCurves = cliCurves.split(separator: ",").map(String.init)
+        } else if let stored = defaults.stringArray(forKey: Self.tlsCurvesKey), !stored.isEmpty {
+            tlsCurves = stored
+        } else {
+            tlsCurves = nil
         }
 
         if let cliRedir = cli["http-redirect-port"], let n = Int(cliRedir) {

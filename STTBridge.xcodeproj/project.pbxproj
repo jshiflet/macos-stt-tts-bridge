@@ -284,13 +284,15 @@
 		};
 		63B83F7F2EADFE7000544088 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 63B83F702EADFE6E00544088 /* STTBridge */;
+			baseConfigurationReferenceRelativePath = Config.xcconfig;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = STTBridge;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(BUILD_NUMBER)";
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
@@ -306,7 +308,7 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = STTBridge;
+				INFOPLIST_KEY_CFBundleDisplayName = "Mac Speech Bridge";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "To enable Speech-to-Text services for the Home Assistant STT integration";
@@ -316,7 +318,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = "$(VERSION)";
 				PRODUCT_BUNDLE_IDENTIFIER = dfl.STTBridge;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -331,13 +333,15 @@
 		};
 		63B83F802EADFE7000544088 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 63B83F702EADFE6E00544088 /* STTBridge */;
+			baseConfigurationReferenceRelativePath = Config.xcconfig;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = STTBridge;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(BUILD_NUMBER)";
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
@@ -353,7 +357,7 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = STTBridge;
+				INFOPLIST_KEY_CFBundleDisplayName = "Mac Speech Bridge";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "To enable Speech-to-Text services for the Home Assistant STT integration";
@@ -363,7 +367,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = "$(VERSION)";
 				PRODUCT_BUNDLE_IDENTIFIER = dfl.STTBridge;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

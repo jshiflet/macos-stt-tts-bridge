@@ -69,6 +69,38 @@ enum TLSCipherCatalog {
     ]
 }
 
+// MARK: - Curve catalog
+
+/// A single elliptic-curve option presented in the Settings UI.
+struct TLSCurveOption: Identifiable, Hashable {
+    /// Stable identifier persisted to UserDefaults and accepted by the CLI.
+    let id: String
+    let displayName: String
+    let niossl: NIOTLSCurve
+    /// True for post-quantum hybrid curves (currently only `x25519_MLKEM768`),
+    /// which combine classical ECDH with a Kyber-based KEM to resist
+    /// "harvest now, decrypt later" attacks by future quantum computers.
+    let isQuantumSecure: Bool
+}
+
+enum TLSCurveCatalog {
+    static let all: [TLSCurveOption] = [
+        .init(id: "secp256r1", displayName: "secp256r1", niossl: .secp256r1, isQuantumSecure: false),
+        .init(id: "secp384r1", displayName: "secp384r1", niossl: .secp384r1, isQuantumSecure: false),
+        .init(id: "secp521r1", displayName: "secp521r1", niossl: .secp521r1, isQuantumSecure: false),
+        .init(id: "x25519", displayName: "x25519", niossl: .x25519, isQuantumSecure: false),
+        .init(id: "x25519_MLKEM768", displayName: "x25519_MLKEM768", niossl: .x25519_MLKEM768, isQuantumSecure: true),
+        .init(id: "x448", displayName: "x448", niossl: .x448, isQuantumSecure: false)
+    ]
+
+    static let allIDs: [String] = all.map(\.id)
+
+    /// Looks up the NIOSSL constant for a stored identifier; nil if unknown.
+    static func niossl(for id: String) -> NIOTLSCurve? {
+        all.first { $0.id == id }?.niossl
+    }
+}
+
 // MARK: - Certificate file store
 
 /// Manages TLS certificate material inside the sandboxed app container so the

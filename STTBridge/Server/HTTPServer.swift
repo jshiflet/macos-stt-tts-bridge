@@ -118,6 +118,12 @@ final class HTTPServer {
         if let ciphers = config.tlsCustomCiphers, !ciphers.isEmpty {
             tls.cipherSuites = ciphers.joined(separator: ":")
         }
+        if let curveIDs = config.tlsCurves, !curveIDs.isEmpty {
+            let curves = curveIDs.compactMap { TLSCurveCatalog.niossl(for: $0) }
+            if !curves.isEmpty {
+                tls.curves = curves
+            }
+        }
         // HTTP/1.1 over TLS — declare it via ALPN so well-behaved clients don't
         // attempt h2 (we don't speak HTTP/2 here).
         tls.applicationProtocols = ["http/1.1"]
@@ -160,8 +166,9 @@ final class HTTPServer {
                 let handler = HTTPHandler(server: self, upgrader: upgrader)
                 let prelude: EventLoopFuture<Void>
                 if let ctx = sslContext {
-                    let sslHandler = NIOSSLServerHandler(context: ctx)
-                    prelude = channel.pipeline.addHandler(sslHandler)
+                    prelude = channel.eventLoop.makeCompletedFuture {
+                        try channel.pipeline.syncOperations.addHandler(NIOSSLServerHandler(context: ctx))
+                    }
                 } else {
                     prelude = channel.eventLoop.makeSucceededFuture(())
                 }

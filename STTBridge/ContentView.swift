@@ -226,62 +226,25 @@ struct ContentView: View {
     @StateObject private var viewModel = AppViewModel()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading) {
-                Text("STTBridge Server").font(.title).bold()
-                Text(status).font(.body).textSelection(.enabled)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                statusHeader
+                sttSection
+                ttsSection
+                saySection
             }
-
-            Divider()
-
-            Text("Speech-to-Text (STT)").font(.title2)
-            Text(viewModel.sttText)
-                .frame(minHeight: 70, alignment: .topLeading)
-                .padding(5)
-                .border(Color.gray.opacity(0.5), width: 1)
-            Button(viewModel.isRecording ? "Stop Recording" : "Start Recording", action: viewModel.toggleRecording)
-                .tint(viewModel.isRecording ? .red : .accentColor)
-
-            Divider()
-
-            Text("Text-to-Speech (TTS)").font(.title2)
-            TextEditor(text: $viewModel.ttsText)
-                .frame(height: 80)
-                .border(Color.gray.opacity(0.5), width: 1)
-            
-            HStack {
-                Picker("Voice:", selection: $viewModel.selectedVoiceIdentifier) {
-                    ForEach(viewModel.voices, id: \.identifier) { voice in
-                        Text("\(voice.name) (\(voice.language))").tag(voice.identifier as String?)
-                    }
-                }
-                .pickerStyle(.menu)
-                
-                Button("Speak", action: viewModel.speak)
-            }
-
-            Divider()
-
-            Text("macOS say Test").font(.title2)
-            TextEditor(text: $viewModel.sayText)
-                .frame(height: 80)
-                .border(Color.gray.opacity(0.5), width: 1)
-
-            Toggle("Output to WAV file", isOn: $viewModel.sayOutputToFile)
-
-            HStack {
-                Button(viewModel.sayOutputToFile ? "Save WAV…" : "Run say", action: viewModel.runSay)
-                    .disabled(viewModel.isRunningSay)
-                if !viewModel.sayStatus.isEmpty {
-                    Text(viewModel.sayStatus)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(20)
-        .frame(minWidth: 620, alignment: .leading)
+        .frame(minWidth: 620, idealWidth: 620, maxWidth: 620, minHeight: 400, idealHeight: 650, maxHeight: 650)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                SettingsLink {
+                    Label("Settings", systemImage: "gearshape")
+                }
+                .help("Open Settings")
+            }
+        }
         .fileExporter(
             isPresented: $viewModel.isShowingSayExporter,
             document: viewModel.sayExportDocument,
@@ -290,5 +253,144 @@ struct ContentView: View {
             onCompletion: viewModel.handleSayExport,
             onCancellation: viewModel.cancelSayExport
         )
+    }
+
+    // MARK: Status header
+
+    @ViewBuilder
+    private var statusHeader: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: statusIcon)
+                .foregroundStyle(statusColor)
+                .font(.title)
+                .symbolRenderingMode(.hierarchical)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("STTBridge")
+                    .font(.title2).bold()
+                Text(status)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+            }
+            Spacer()
+            Image(systemName: "waveform.and.person.filled")
+                .font(.system(size: 32))
+                .foregroundStyle(.secondary)
+                .symbolRenderingMode(.hierarchical)
+                .padding(.trailing, 8)
+        }
+        .padding(.top,-8)
+    }
+
+    private var statusIcon: String {
+        let s = status.lowercased()
+        if s.contains("error") || s.contains("failed") { return "exclamationmark.triangle.fill" }
+        if s.contains("running") { return "checkmark.circle.fill" }
+        return "circle.dotted"
+    }
+
+    private var statusColor: Color {
+        let s = status.lowercased()
+        if s.contains("error") || s.contains("failed") { return .red }
+        if s.contains("running") { return .green }
+        return .orange
+    }
+
+    // MARK: Speech-to-Text
+
+    @ViewBuilder
+    private var sttSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(viewModel.sttText.isEmpty ? "Press Start Recording to begin." : viewModel.sttText)
+                    .foregroundStyle(viewModel.sttText.isEmpty ? .secondary : .primary)
+                    .frame(maxWidth: .infinity, minHeight: 70, alignment: .topLeading)
+                    .padding(8)
+                    .background(.background.secondary, in: RoundedRectangle(cornerRadius: 6))
+                    .textSelection(.enabled)
+
+                HStack {
+                    Button(viewModel.isRecording ? "Stop Recording" : "Start Recording") {
+                        viewModel.toggleRecording()
+                    }
+                    .controlSize(.large)
+                    .tint(viewModel.isRecording ? .red : nil)
+                    Spacer()
+                }
+            }
+            .padding(.top, 4)
+        } label: {
+            Label("Speech-to-Text", systemImage: "waveform.and.mic")
+                .font(.headline)
+        }
+    }
+
+    // MARK: Text-to-Speech (AVSpeechSynthesizer)
+
+    @ViewBuilder
+    private var ttsSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                TextEditor(text: $viewModel.ttsText)
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    .frame(height: 80)
+                    .background(.background.secondary, in: RoundedRectangle(cornerRadius: 6))
+
+                Picker("Voice:", selection: $viewModel.selectedVoiceIdentifier) {
+                    ForEach(viewModel.voices, id: \.identifier) { voice in
+                        Text("\(voice.name) (\(voice.language))").tag(voice.identifier as String?)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                HStack {
+                    Button("Speak", action: viewModel.speak)
+                        .controlSize(.large)
+                    Spacer()
+                }
+            }
+            .padding(.top, 4)
+        } label: {
+            Label("Text-to-Speech", systemImage: "text.bubble.fill")
+                .font(.headline)
+        }
+    }
+
+    // MARK: macOS say
+
+    @ViewBuilder
+    private var saySection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                TextEditor(text: $viewModel.sayText)
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    .frame(height: 80)
+                    .background(.background.secondary, in: RoundedRectangle(cornerRadius: 6))
+
+                Toggle("Output to WAV file", isOn: $viewModel.sayOutputToFile)
+
+                HStack {
+                    Button(viewModel.sayOutputToFile ? "Save WAV File" : "Run say") {
+                        viewModel.runSay()
+                    }
+                    .controlSize(.large)
+                    .disabled(viewModel.isRunningSay)
+
+                    if !viewModel.sayStatus.isEmpty {
+                        Text(viewModel.sayStatus)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+            }
+            .padding(.top, 4)
+        } label: {
+            Label("macOS say", systemImage: "siri")
+                .font(.headline)
+        }
     }
 }

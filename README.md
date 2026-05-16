@@ -19,11 +19,10 @@ Native macOS server application that makes Apple's high-quality Speech Recogniti
 ### Installation
 
 1. **Download the app:**
-
-   ```bash
-   # Download the latest version from Releases
-   # Extract and move to /Applications
-   ```
+    - Download the latest version from Releases
+    - Extract and move to /Applications
+    - From Terminal.app, run `sudo xattr -r -d com.apple.quarantine /Applications/STTBridge.app`\
+    *__Note:__ When running on Apple Silicon (A18, M1, M2, M3, M4, M5, etc.) the application will be marked as quarantined and will result in an error message about the application being corrupted when you try to launch it. This command resolves that problem.*
 
 2. **Start with UI:**
    - Double-click on `STTBridge.app`
@@ -54,10 +53,10 @@ cd /path/to/STTBridge
 launchctl list | grep sttbridge
 
 # Stop
-launchctl unload ~/Library/LaunchAgents/io.github.daydy16.sttbridge.plist
+launchctl unload ~/Library/LaunchAgents/io.github.jshiflet.sttbridge.plist
 
 # Start
-launchctl load ~/Library/LaunchAgents/io.github.daydy16.sttbridge.plist
+launchctl load ~/Library/LaunchAgents/io.github.jshiflet.sttbridge.plist
 
 # View logs
 tail -f /tmp/sttbridge.log
@@ -128,7 +127,7 @@ ws.onmessage = (event) => {
 ### Installation
 
 1. **HACS Installation (recommended):**
-   - Add `https://github.com/daydy16/ha-local-macos-tts-stt` as Custom Repository
+   - Add `https://github.com/jshiflet/ha-local-macos-tts-stt` as Custom Repository
    - Install "STT/TTS Bridge"
    - Restart Home Assistant
 
@@ -136,7 +135,7 @@ ws.onmessage = (event) => {
 
    ```bash
    cd config/custom_components
-   git clone https://github.com/daydy16/ha-local-macos-tts-stt sttbridge
+   git clone https://github.com/jshiflet/ha-local-macos-tts-stt sttbridge
    ```
 
 ### Configuration
@@ -176,7 +175,7 @@ To customize, edit `STTBridge/Server/Config.swift` and recompile.
 
 ```bash
 # Clone repository
-git clone https://github.com/daydy16/macos-stt-tts-bridge.git
+git clone https://github.com/jshiflet/macos-stt-tts-bridge.git
 cd macos-stt-tts-bridge
 
 # Open in Xcode

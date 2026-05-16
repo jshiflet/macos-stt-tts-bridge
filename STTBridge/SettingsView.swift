@@ -8,9 +8,9 @@ struct ServerSettingsView: View {
     var body: some View {
         TabView {
             ServerSettingsTab()
-                .tabItem { Label("Server", systemImage: "network") }
+                .tabItem { Label("Server", systemImage: "server.rack") }
             AuthSettingsTab()
-                .tabItem { Label("Authentication", systemImage: "key.fill") }
+                .tabItem { Label("Authentication", systemImage: "key.horizontal.fill") }
             TLSSettingsTab()
                 .tabItem { Label("TLS", systemImage: "lock.shield") }
         }
@@ -82,6 +82,7 @@ private struct ServerSettingsTab: View {
                 LabeledContent("Port:") {
                     HStack(spacing: 6) {
                         TextField("", text: $portText)
+                            .textFieldStyle(.roundedBorder)
                             .frame(width: 80)
                             .multilineTextAlignment(.trailing)
                         Button("Set Port") { applyPort() }
@@ -89,10 +90,10 @@ private struct ServerSettingsTab: View {
                     }
                 }
                 HStack {
+                    Spacer()
                     Button("Refresh interfaces") {
                         interfaces = NetworkInterfaces.activeIPv4Addresses()
                     }
-                    Spacer()
                 }
             } header: {
                 Text("Network").font(.headline)
@@ -490,6 +491,7 @@ private struct TLSSettingsTab: View {
                     LabeledContent("Redirect port:") {
                         HStack(spacing: 6) {
                             TextField("", text: $redirectPortText)
+                                .textFieldStyle(.roundedBorder)
                                 .frame(width: 80)
                                 .multilineTextAlignment(.trailing)
                             Button("Set Port") { applyRedirectPort() }
@@ -531,7 +533,7 @@ private struct TLSSettingsTab: View {
             }
 
             Section {
-                Toggle("Use NIO defaults", isOn: useDefaultsBinding)
+                Toggle("Use recommended defaults", isOn: useDefaultsBinding)
                 if !useDefaults {
                     ForEach(TLSCipherCatalog.recommended, id: \.self) { cipher in
                         Toggle(cipher, isOn: cipherBinding(for: cipher))
@@ -542,6 +544,31 @@ private struct TLSSettingsTab: View {
                 Text("Cipher Suites (TLS ≤ 1.2)").font(.headline)
             } footer: {
                 Text("TLS 1.3 cipher suites are fixed by RFC 8446 (AES-GCM and ChaCha20-Poly1305) and cannot be customized.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Use recommended defaults", isOn: useDefaultsCurvesBinding)
+                if !useDefaultsCurves {
+                    ForEach(TLSCurveCatalog.all) { curve in
+                        Toggle(isOn: curveBinding(for: curve.id)) {
+                            HStack(spacing: 6) {
+                                Text(curve.displayName)
+                                    .font(.system(.callout, design: .monospaced))
+                                if curve.isQuantumSecure {
+                                    Image(systemName: "atom")
+                                        .foregroundStyle(.green)
+                                        .help("Post-quantum hybrid key exchange")
+                                }
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("TLS Curves").font(.headline)
+            } footer: {
+                Text("Selected curves are offered to clients during the TLS key-exchange. x25519_MLKEM768 ⚛︎ is post-quantum-secure — it combines classical X25519 ECDH with the ML-KEM-768 lattice KEM, so handshakes recorded today can't be retroactively broken by a future quantum computer.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -745,6 +772,55 @@ private struct TLSSettingsTab: View {
     private var redirectPortTextIsValidChange: Bool {
         guard let p = Int(redirectPortText), p > 0, p < 65536 else { return false }
         return p != serverMgr.httpRedirectPort
+    }
+
+    /// True when `tlsCurves` is unset — meaning NIOSSL chooses the curve list.
+    private var useDefaultsCurves: Bool { serverMgr.tlsCurves == nil }
+
+    /// Master toggle that flips between "NIOSSL defaults" (nil whitelist) and
+    /// "explicit custom selection" (seeded with all curves so the user starts
+    /// from the same set the defaults would offer).
+    private var useDefaultsCurvesBinding: Binding<Bool> {
+        Binding(
+            get: { useDefaultsCurves },
+            set: { newValue in
+                if newValue {
+                    UserDefaults.standard.removeObject(forKey: Config.tlsCurvesKey)
+                } else {
+                    UserDefaults.standard.set(TLSCurveCatalog.allIDs, forKey: Config.tlsCurvesKey)
+                }
+                serverMgr.reload()
+            }
+        )
+    }
+
+    /// Toggle binding for a single curve. Only writes the whitelist; the user
+    /// flips back to defaults via the "Use recommended defaults" toggle above.
+    /// An empty selection falls back to defaults so the server never starts
+    /// with zero curves available.
+    private func curveBinding(for id: String) -> Binding<Bool> {
+        Binding(
+            get: {
+                if let list = serverMgr.tlsCurves {
+                    return list.contains(id)
+                }
+                return true
+            },
+            set: { isOn in
+                var list = serverMgr.tlsCurves ?? TLSCurveCatalog.allIDs
+                if isOn {
+                    if !list.contains(id) { list.append(id) }
+                } else {
+                    list.removeAll { $0 == id }
+                }
+                if list.isEmpty {
+                    UserDefaults.standard.removeObject(forKey: Config.tlsCurvesKey)
+                } else {
+                    UserDefaults.standard.set(list, forKey: Config.tlsCurvesKey)
+                }
+                serverMgr.reload()
+            }
+        )
     }
 
     private func cipherBinding(for name: String) -> Binding<Bool> {

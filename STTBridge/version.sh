@@ -8,6 +8,9 @@ cd "$SRCROOT/$PRODUCT_NAME"
 # Get the current date in the format "YYYYMMDD".
 current_date=$(date "+%Y%m%d")
 
+# Get the current year in the format "YYYY"
+current_year=$(date "+%Y")
+
 # Parse the 'Config.xcconfig' file to retrieve the previous build number.
 # The 'awk' command is used to find the line containing "BUILD_NUMBER"
 # and the 'tr' command is used to remove any spaces.
@@ -24,9 +27,17 @@ new_counter=$((current_date == previous_date ? counter + 1 : 1))
 # Combine the current date and the new counter to create the new build number.
 new_build_number="${current_date}${new_counter}"
 
+# Use 'sed' command to update the copyright string with the current year in
+# the 'Config.xcconfig' file.
+sed -i '' "s/^COPYRIGHT_YEAR = .*/COPYRIGHT_YEAR = ${current_year}/" Config.xcconfig
+
 # Use 'sed' command to replace the previous build number with the new build
 # number in the 'Config.xcconfig' file.
 sed -i -e "/BUILD_NUMBER =/ s/= .*/= $new_build_number/" Config.xcconfig
 
-# Remove the backup file created by 'sed' command.
+# Use 'sed' command to update the copyright string with the current year in
+# the 'LICENSE' file
+sed -i '' -E "s/Copyright © [0-9]{4}/Copyright © ${current_year}/" ../LICENSE
+
+# Remove the backup files created by 'sed' command.
 rm -f Config.xcconfig-e

@@ -8,5 +8,6 @@
 // Configuration settings file format documentation can be found at:
 // https://help.apple.com/xcode/#/dev745c5c974
 
+COPYRIGHT_YEAR = 2025
 VERSION = 0.1.9
 BUILD_NUMBER = 202605165

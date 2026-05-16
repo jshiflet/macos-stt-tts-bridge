@@ -1,4 +1,4 @@
-**Read this in other languages:** [Deutsch](STTBridge_MVP.de.md)
+**Read this in other languages:** [English](STTBridge_MVP.md)
 
 # STTBridge – MVP (macOS, Swift, Apple-only) – **Complete Guide + Source Code**
 
@@ -6,49 +6,49 @@
 - HTTP (SwiftNIO): `GET /healthz`, `GET /languages`, `GET /voices`, `POST /stt`, `POST /tts`
 - WebSocket: `WS /stt/stream` (PCM16‑Chunks → Partials/Finals)
 - **Apple frameworks only**: `Speech`, `AVFoundation`
-- **Web-Demo** (static page)
+- **Web‑Demo** (statische Seite)
 
 > **Note about this document:**  
 > All code blocks use **escaped backticks** (`\`\`\``) so this chat view does **not render** them.  
-> In your local file, you can simply **leave the backslashes in place** (Markdown renderers generally accept this) **or** remove them if you want “real” fences.
+> In deiner lokalen Datei kannst du einfach die Backslashes **stehen lassen** (Markdown-Renderer akzeptiert das in der Regel) **oder** sie entfernen, wenn du „echte“ Fences willst.
 
 ---
 
-## 1) Create the Xcode Project
+## 1) Xcode‑Projekt anlegen
 
 1. Xcode → **File → New → Project…**  
    Template: **App (macOS)**  
    Product Name: **STTBridge** · Interface: **SwiftUI** · Language: **Swift**
 
 2. **Add SwiftNIO**  
-   - Project (blue icon) → Tab **Package Dependencies** → **+**
+   - Projekt (blaues Icon) → Tab **Package Dependencies** → **+**
    - URL: `https://github.com/apple/swift-nio.git` → **Add Package**
-   - Assign the packages to the **STTBridge app target**: **NIO**, **NIOHTTP1**, **NIOWebSocket**
+   - Pakete dem **App‑Target STTBridge** zuweisen: **NIO**, **NIOHTTP1**, **NIOWebSocket**
 
 3. **Set privacy keys** (Targets → STTBridge → **Info**)  
    - `NSMicrophoneUsageDescription` : "Access to the microphone for local STT."  
    - `NSSpeechRecognitionUsageDescription` : "Speech recognition runs locally on this Mac."
 
-4. **(Recommended) App Sandbox** (Targets → **Signing & Capabilities** → **+ Capability** → App Sandbox)  
+4. **(Empfohlen) App Sandbox** (Targets → **Signing & Capabilities** → **+ Capability** → App Sandbox)  
    - **Network** → **Incoming Connections (Server)**  
    - **Hardware** → **Audio Input (Microphone)**  
-   - Enable **Speech Recognition**
+   - **Speech Recognition** aktivieren
 
 5. **Static web resources**  
-   - In Finder, create a **WebRoot** folder with `index.html`, `app.js`, and `styles.css` (see below).  
-   - **Import into Xcode**: drag it onto the target in the navigator →
+   - Im Finder einen Ordner **WebRoot** anlegen mit `index.html`, `app.js`, `styles.css` (siehe unten).  
+   - **In Xcode importieren**: im Navigator auf das Target ziehen →
      choose **Create folder references** (blue folder).
 
-6. **Run without the debugger** (optional, more stable)  
+6. **Ohne Debugger laufen lassen** (optional, stabiler)  
    - Product → Scheme → Edit Scheme… → **Run**  
-   - Turn off **[ ] Debug executable**  
+   - **[ ] Debug executable** ausschalten  
    - (Optional) **Build configuration: Release**
 
 ---
 
 ## 2) Create Files (Swift Source)
 
-In Xcode, create a **Server** folder and add these files there.
+Lege in Xcode einen Ordner **Server** an und erstelle dort diese Dateien.
 
 ### 2.1 `Config.swift`
 \`\`\`swift
@@ -790,7 +790,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("STTBridge").font(.title).bold()
             Text(status).font(.body).textSelection(.enabled)
-            Text("• Endpoints: /healthz, /languages, /voices, /stt, /tts, WS: /stt/stream")
+            Text("• Endpunkte: /healthz, /languages, /voices, /stt, /tts, WS: /stt/stream")
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .padding(20)
@@ -801,12 +801,12 @@ struct ContentView: View {
 
 ---
 
-## 4) WebRoot Files (add as a **Folder Reference**)
+## 4) WebRoot‑Dateien (als **Folder Reference** einbinden)
 
 ### 4.1 `WebRoot/index.html`
 \`\`\`html
 <!doctype html>
-<html lang="en">
+<html lang="de">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>STTBridge – Demo</title>
@@ -835,7 +835,7 @@ struct ContentView: View {
       <label>Voice ID:</label><input id="voiceId" size="40" placeholder="com.apple.speech.synthesis.voice...">
       <label>Rate:</label><input id="rate" type="number" min="0.5" max="2.0" step="0.1" value="1.0">
       <label>Pitch:</label><input id="pitch" type="number" min="-1" max="1" step="0.1" value="0">
-      <label><input id="speakLocal" type="checkbox"> play directly on the Mac</label>
+      <label><input id="speakLocal" type="checkbox"> direkt am Mac ausgeben</label>
     </div>
     <div class="row"><button id="ttsBtn">Speak</button></div>
     <audio id="player" controls></audio>
@@ -920,7 +920,7 @@ pre{background:#0a0f14;color:#7dd3fc;padding:12px;border-radius:8px;height:220px
 # Health
 curl http://127.0.0.1:8787/healthz
 
-# STT with WAV
+# STT mit WAV
 curl --data-binary @sample.wav -H "Content-Type: audio/wav" \
   "http://127.0.0.1:8787/stt?lang=en-US&offline=true"
 
@@ -930,7 +930,7 @@ curl -X POST http://127.0.0.1:8787/tts \
   -d '{"text":"Hello World"}' --output out.wav
 \`\`\`
 
-> **Stable permissions:** Copy the app to **/Applications** and always launch **the same copy**.  
+> **Stabile Freigaben:** App in **/Applications** kopieren und immer **dieselbe Kopie** starten.  
 > Reset TCC if needed:  
 > \`\`\`bash
 > tccutil reset Microphone local.sttbridge
@@ -941,7 +941,7 @@ curl -X POST http://127.0.0.1:8787/tts \
 
 ## 6) Optional: Auth & ENV
 - `AUTH_TOKEN=secret` → mutating endpoints require `Authorization: Bearer secret`.
-- `PORT`, `BIND_HOST`, `DEFAULT_LANG`, and `OFFLINE_ONLY` are read.
+- `PORT`, `BIND_HOST`, `DEFAULT_LANG`, `OFFLINE_ONLY` werden gelesen.
 
 ---
 

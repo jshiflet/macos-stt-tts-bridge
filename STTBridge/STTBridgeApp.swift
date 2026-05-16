@@ -38,10 +38,40 @@ struct STTBridgeApp: App {
         .defaultSize(width: isHeadless ? 0 : 620, height: isHeadless ? 0 : 720)
         .windowResizability(.contentSize)
         .windowToolbarStyle(.unified)
+        .commands {
+            // Replace the stock "About STTBridge" menu item with our custom
+            // panel — the standard NSAboutPanel can't host an interactive
+            // Acknowledgements button, so we own the whole panel.
+            CommandGroup(replacing: .appInfo) {
+                AboutMenuButton()
+            }
+        }
+
+        // Standalone scenes the menu and the Acknowledgements button open.
+        Window("About STTBridge", id: "about") {
+            AboutView()
+        }
+        .windowResizability(.contentSize)
+
+        Window("Acknowledgements", id: "acknowledgements") {
+            LicenseView()
+        }
 
         Settings {
             ServerSettingsView()
                 .environmentObject(serverMgr)
+        }
+    }
+}
+
+/// View that lives inside the .appInfo command group. Needs to be its own
+/// View struct so it can pull the `openWindow` action out of the environment.
+private struct AboutMenuButton: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("About STTBridge") {
+            openWindow(id: "about")
         }
     }
 }

@@ -39,5 +39,8 @@ sed -i -e "/BUILD_NUMBER =/ s/= .*/= $new_build_number/" Config.xcconfig
 # the 'LICENSE' file
 sed -i '' -E "s/Copyright © [0-9]{4}/Copyright © ${current_year}/" ../LICENSE
 
+# Copy the LICENSE file into the project's LICENSE.txt file
+cp -f ../LICENSE LICENSE.txt
+
 # Remove the backup files created by 'sed' command.
 rm -f Config.xcconfig-e

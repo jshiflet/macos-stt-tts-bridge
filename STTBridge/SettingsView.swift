@@ -13,8 +13,10 @@ struct ServerSettingsView: View {
                 .tabItem { Label("Authentication", systemImage: "key.horizontal.fill") }
             TLSSettingsTab()
                 .tabItem { Label("TLS", systemImage: "lock.shield") }
+            ACMESettingsTab()
+                .tabItem { Label("ACME", systemImage: "arrow.clockwise.icloud") }
         }
-        .frame(width: 580, height: 520)
+        .frame(width: 620, height: 620)
         .padding(.top, 8)
     }
 }
@@ -467,11 +469,11 @@ private struct TLSSettingsTab: View {
                 }
 
                 HStack {
+                    Spacer()
                     Button("Save password") { applyPassword() }
                         .disabled(passwordText == (serverMgr.tlsEnabled ? (Config().tlsP12Password ?? "") : ""))
                     Button("Test certificate") { runTest() }
                         .disabled(!certComplete)
-                    Spacer()
                 }
 
                 if let result = testResult {
@@ -600,10 +602,11 @@ private struct TLSSettingsTab: View {
                  : "No PKCS#12 bundle imported")
                 .font(.callout)
             Spacer()
-        }
-        HStack {
             Button("Choose .p12 / .pfx…") { importPKCS12() }
-            if p12Present {
+        }
+        if p12Present {
+            HStack {
+                Spacer()
                 Button(role: .destructive) {
                     CertificateStore.deletePKCS12()
                     refreshCertState()

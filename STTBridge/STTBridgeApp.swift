@@ -92,6 +92,37 @@ final class ServerManager: ObservableObject {
     @Published var tlsCurves: [String]?
     @Published var httpRedirectPort: Int
 
+    // ACME state mirrored from ACMEConfig + Keychain so SwiftUI views can
+    // bind to it without poking UserDefaults on every render.
+    @Published var acmeCA: ACMECA
+    @Published var acmeCustomDirectoryURL: String
+    @Published var acmeAccountEmail: String
+    @Published var acmeAccountRegistered: Bool
+    @Published var acmeAccountURL: String
+    @Published var acmeProfileName: String?
+    @Published var acmeAvailableProfiles: [String] = []
+    @Published var acmeDomains: String
+    @Published var acmeChallengeType: ACMEChallengeType
+    @Published var acmeDNSMode: ACMEDNSMode
+    @Published var acmeDNSResolverPreset: ACMEDNSResolverPreset
+    @Published var acmeCustomResolverHost: String
+    @Published var acmeCustomDoHURL: String
+    @Published var acmeDNSTimeoutSeconds: Int
+    @Published var acmeDNSPollSeconds: Int
+    @Published var acmeAutoRenewEnabled: Bool
+    @Published var acmeRenewWhenDaysRemain: Int
+    @Published var acmeKeyType: ACMEKeyType
+    @Published var acmeECCSize: ACMEECCSize
+    @Published var acmeRSASize: ACMERSASize
+    @Published var acmeStatus: ACMEStatus = .idle
+    @Published var acmeLastIssuedAt: Date?
+    @Published var acmeLastProfileUsed: String?
+    @Published var acmeLastError: String?
+
+    let acmeCoordinator = ACMECoordinator()
+    private var acmeStatusTask: Task<Void, Never>?
+    private var acmeRenewalTask: Task<Void, Never>?
+
     private var server: HTTPServer?
     private let serverQueue = DispatchQueue(label: "sttbridge.server", qos: .userInitiated)
 
@@ -116,10 +147,41 @@ final class ServerManager: ObservableObject {
         self.tlsCurves = cfg.tlsCurves
         self.httpRedirectPort = cfg.httpRedirectPort
 
+        let acmeCfg = ACMEConfig()
+        self.acmeCA = acmeCfg.ca
+        self.acmeCustomDirectoryURL = UserDefaults.standard.string(forKey: ACMEConfig.customDirectoryURLKey) ?? ""
+        self.acmeAccountEmail = acmeCfg.accountEmail
+        self.acmeAccountRegistered = acmeCfg.accountRegistered
+        self.acmeAccountURL = UserDefaults.standard.string(forKey: "acmeAccountURL") ?? ""
+        self.acmeProfileName = acmeCfg.profile.storedName
+        self.acmeDomains = UserDefaults.standard.string(forKey: ACMEConfig.domainsKey) ?? ""
+        self.acmeChallengeType = acmeCfg.challengeType
+        self.acmeDNSMode = acmeCfg.dnsMode
+        self.acmeDNSResolverPreset = acmeCfg.dnsResolverPreset
+        self.acmeCustomResolverHost = acmeCfg.customResolverHost
+        self.acmeCustomDoHURL = acmeCfg.customDoHURL
+        self.acmeDNSTimeoutSeconds = acmeCfg.dnsValidationTimeoutSeconds
+        self.acmeDNSPollSeconds = acmeCfg.dnsPropagationPollSeconds
+        self.acmeAutoRenewEnabled = acmeCfg.autoRenewEnabled
+        self.acmeRenewWhenDaysRemain = acmeCfg.renewWhenDaysRemain
+        self.acmeKeyType = acmeCfg.keyType
+        self.acmeECCSize = acmeCfg.eccSize
+        self.acmeRSASize = acmeCfg.rsaSize
+        self.acmeLastIssuedAt = UserDefaults.standard.object(forKey: ACMEConfig.lastIssuedAtKey) as? Date
+        self.acmeLastProfileUsed = UserDefaults.standard.string(forKey: ACMEConfig.lastProfileUsedKey)
+        self.acmeLastError = UserDefaults.standard.string(forKey: ACMEConfig.lastRenewErrorKey)
+
         SFSpeechRecognizer.requestAuthorization { st in
             print("Speech auth: \(st)")
         }
         startServer(config: cfg)
+        startACMEStatusObservation()
+        startACMERenewalTimer()
+    }
+
+    deinit {
+        acmeStatusTask?.cancel()
+        acmeRenewalTask?.cancel()
     }
 
     /// Re-reads Config from UserDefaults/env and restarts the server. The serial
@@ -130,6 +192,70 @@ final class ServerManager: ObservableObject {
         status = "Restarting on \(Self.urlList(hosts: cfg.bindHosts, port: cfg.port, tls: cfg.tlsEnabled))…"
         server?.stop()
         startServer(config: cfg)
+        reloadACMEMirrors()
+    }
+
+    /// Re-pulls the ACME @Published mirrors from UserDefaults. Called after
+    /// the settings UI flushes a change so the rest of the view tree sees it.
+    func reloadACMEMirrors() {
+        let acmeCfg = ACMEConfig()
+        self.acmeCA = acmeCfg.ca
+        self.acmeCustomDirectoryURL = UserDefaults.standard.string(forKey: ACMEConfig.customDirectoryURLKey) ?? ""
+        self.acmeAccountEmail = acmeCfg.accountEmail
+        self.acmeAccountRegistered = acmeCfg.accountRegistered
+        self.acmeAccountURL = UserDefaults.standard.string(forKey: "acmeAccountURL") ?? ""
+        self.acmeProfileName = acmeCfg.profile.storedName
+        self.acmeDomains = UserDefaults.standard.string(forKey: ACMEConfig.domainsKey) ?? ""
+        self.acmeChallengeType = acmeCfg.challengeType
+        self.acmeDNSMode = acmeCfg.dnsMode
+        self.acmeDNSResolverPreset = acmeCfg.dnsResolverPreset
+        self.acmeCustomResolverHost = acmeCfg.customResolverHost
+        self.acmeCustomDoHURL = acmeCfg.customDoHURL
+        self.acmeDNSTimeoutSeconds = acmeCfg.dnsValidationTimeoutSeconds
+        self.acmeDNSPollSeconds = acmeCfg.dnsPropagationPollSeconds
+        self.acmeAutoRenewEnabled = acmeCfg.autoRenewEnabled
+        self.acmeRenewWhenDaysRemain = acmeCfg.renewWhenDaysRemain
+        self.acmeKeyType = acmeCfg.keyType
+        self.acmeECCSize = acmeCfg.eccSize
+        self.acmeRSASize = acmeCfg.rsaSize
+        self.acmeLastIssuedAt = UserDefaults.standard.object(forKey: ACMEConfig.lastIssuedAtKey) as? Date
+        self.acmeLastProfileUsed = UserDefaults.standard.string(forKey: ACMEConfig.lastProfileUsedKey)
+        self.acmeLastError = UserDefaults.standard.string(forKey: ACMEConfig.lastRenewErrorKey)
+    }
+
+    /// Subscribes to the coordinator's status stream so the Settings tab's
+    /// log/state line updates live during issuance.
+    private func startACMEStatusObservation() {
+        let stream = acmeCoordinator.events
+        acmeStatusTask = Task { @MainActor [weak self] in
+            for await status in stream {
+                guard let self else { return }
+                self.acmeStatus = status
+                if case .success(let date) = status {
+                    self.acmeLastIssuedAt = date
+                    self.acmeLastError = nil
+                    // The coordinator already updated `tlsCertFormat` in UserDefaults
+                    // and dropped fresh PEM material into CertificateStore; restart
+                    // the server so the new cert is picked up.
+                    self.reload()
+                }
+                if case .failure(let msg) = status {
+                    self.acmeLastError = msg
+                }
+            }
+        }
+    }
+
+    /// Daily timer for background renewal. Runs once on launch (the coordinator
+    /// short-circuits when there's nothing to do) and then every 24 hours.
+    private func startACMERenewalTimer() {
+        let coordinator = acmeCoordinator
+        acmeRenewalTask = Task.detached(priority: .background) {
+            while !Task.isCancelled {
+                await coordinator.renewIfNeeded()
+                try? await Task.sleep(nanoseconds: 24 * 60 * 60 * 1_000_000_000)
+            }
+        }
     }
 
     private func startServer(config: Config) {

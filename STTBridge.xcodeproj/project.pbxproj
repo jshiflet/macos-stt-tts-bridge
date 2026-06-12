@@ -13,6 +13,7 @@
 		63B83FA02EAE057400544088 /* NIOPosix in Frameworks */ = {isa = PBXBuildFile; productRef = 63B83F9F2EAE057400544088 /* NIOPosix */; };
 		63B83FA22EAE057400544088 /* NIOWebSocket in Frameworks */ = {isa = PBXBuildFile; productRef = 63B83FA12EAE057400544088 /* NIOWebSocket */; };
 		8C3A2FAD2FB5AC4700DA4EAB /* NIOSSL in Frameworks */ = {isa = PBXBuildFile; productRef = 8C3A2FAC2FB5AC4700DA4EAB /* NIOSSL */; };
+		8CBE2E332FDBB3F600317177 /* AcmeSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 8CBE2E322FDBB3F600317177 /* AcmeSwift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -37,6 +38,7 @@
 				8C3A2FAD2FB5AC4700DA4EAB /* NIOSSL in Frameworks */,
 				63B83FA02EAE057400544088 /* NIOPosix in Frameworks */,
 				63B83F9C2EAE057400544088 /* NIOCore in Frameworks */,
+				8CBE2E332FDBB3F600317177 /* AcmeSwift in Frameworks */,
 				63B83F9A2EAE057400544088 /* NIO in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -94,6 +96,7 @@
 				63B83F9F2EAE057400544088 /* NIOPosix */,
 				63B83FA12EAE057400544088 /* NIOWebSocket */,
 				8C3A2FAC2FB5AC4700DA4EAB /* NIOSSL */,
+				8CBE2E322FDBB3F600317177 /* AcmeSwift */,
 			);
 			productName = STTBridge;
 			productReference = 63B83F6E2EADFE6E00544088 /* STTBridge.app */;
@@ -126,6 +129,7 @@
 			packageReferences = (
 				63B83F812EADFEBD00544088 /* XCRemoteSwiftPackageReference "swift-nio" */,
 				8C3A2FAB2FB5AC4700DA4EAB /* XCRemoteSwiftPackageReference "swift-nio-ssl" */,
+				8CBE2E312FDBB3F600317177 /* XCRemoteSwiftPackageReference "AcmeSwift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 63B83F6F2EADFE6E00544088 /* Products */;
@@ -298,7 +302,7 @@
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
@@ -347,7 +351,7 @@
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
@@ -422,6 +426,14 @@
 				minimumVersion = 2.37.0;
 			};
 		};
+		8CBE2E312FDBB3F600317177 /* XCRemoteSwiftPackageReference "AcmeSwift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/m-barthelemy/AcmeSwift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -454,6 +466,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 8C3A2FAB2FB5AC4700DA4EAB /* XCRemoteSwiftPackageReference "swift-nio-ssl" */;
 			productName = NIOSSL;
+		};
+		8CBE2E322FDBB3F600317177 /* AcmeSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8CBE2E312FDBB3F600317177 /* XCRemoteSwiftPackageReference "AcmeSwift" */;
+			productName = AcmeSwift;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
